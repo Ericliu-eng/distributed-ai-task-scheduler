@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Orbit · AI Task Scheduler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="grain"></div>
+  <aside>
+    <div class="brand"><span class="brand-mark">O</span><div><b>ORBIT</b><small>AI TASK SCHEDULER</small></div></div>
+    <nav><a class="active">⌁ <span>Control room</span></a><a href="#queue">≡ <span>Task queue</span></a><a href="#activity">⌁ <span>Activity</span></a><a href="/docs" target="_blank">↗ <span>API docs</span></a></nav>
+    <div class="system-card"><div><span class="live-dot"></span>SYSTEM ONLINE</div><strong>2 / 2</strong><small>workers available</small></div>
+    <div class="version">HACKATHON MVP <span>v1.0</span></div>
+  </aside>
+  <main>
+    <header><div><p class="eyebrow">CONTROL ROOM · LIVE</p><h1>Inference, intelligently routed.</h1><p class="lede">Dispatch AI workloads across model tiers using explainable routing, priority queues, and automatic recovery.</p></div><button id="demoBtn" class="primary">▶ Run 90-sec demo</button></header>
+
+    <section class="metrics" id="metrics">
+      <article><label>TOTAL TASKS</label><strong id="mTotal">0</strong><small><i class="cyan"></i><span id="mActive">0 active now</span></small></article>
+      <article><label>SUCCESS RATE</label><strong id="mSuccess">100<span>%</span></strong><small><i class="green"></i>retry-safe execution</small></article>
+      <article><label>COST SAVED</label><strong id="mSaved">0<span>%</span></strong><small><i class="violet"></i>vs. all-large baseline</small></article>
+      <article><label>AVG LATENCY</label><strong id="mLatency">—</strong><small><i class="amber"></i>end-to-end</small></article>
+    </section>
+
+    <section class="grid-top">
+      <article class="panel submit-panel"><div class="panel-head"><div><p class="eyebrow">NEW WORKLOAD</p><h2>Dispatch a task</h2></div><span class="shortcut">⌘ ENTER</span></div>
+        <form id="taskForm"><label class="field-label">PROMPT</label><textarea id="prompt" required minlength="3" placeholder="Describe the AI task you want to run…">Explain why database indexes speed up reads.</textarea>
+          <div class="form-row"><label><span class="field-label">SERVICE LEVEL</span><select id="sla"><option value="standard">Standard · cost optimized</option><option value="urgent">Urgent · latency optimized</option></select></label><label><span class="field-label">PRIORITY <b id="priorityValue">5</b></span><input id="priority" type="range" min="1" max="10" value="5"></label></div>
+          <div class="form-foot"><label class="check"><input id="failOnce" type="checkbox"><span></span>Simulate first-attempt failure</label><button class="primary" type="submit">Dispatch task <span>→</span></button></div>
+        </form>
+        <div id="decision" class="decision hidden"></div>
+      </article>
+      <article class="panel workers"><div class="panel-head"><div><p class="eyebrow">EXECUTION LAYER</p><h2>Worker fleet</h2></div><span class="pulse">LIVE</span></div><div id="workers"></div><div class="routing-legend"><div><span class="model-dot small"></span><p><b>Small tier</b><small>$0.003 / request · fast</small></p></div><div><span class="model-dot large"></span><p><b>Large tier</b><small>$0.018 / request · deep</small></p></div></div></article>
+    </section>
+
+    <section class="panel queue-panel" id="queue"><div class="panel-head"><div><p class="eyebrow">REAL-TIME PIPELINE</p><h2>Task queue</h2></div><div class="filters"><button class="filter active" data-status="all">All</button><button class="filter" data-status="running">Running</button><button class="filter" data-status="succeeded">Succeeded</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>TASK</th><th>ROUTE</th><th>SLA</th><th>STATUS</th><th>ATTEMPT</th><th>LATENCY</th></tr></thead><tbody id="taskRows"><tr><td colspan="6" class="empty">No tasks yet. Dispatch one or run the demo.</td></tr></tbody></table></div>
+    </section>
+
+    <section class="bottom-grid"><article class="panel distribution"><div class="panel-head"><div><p class="eyebrow">ROUTING MIX</p><h2>Model distribution</h2></div><b id="routeRatio">0 / 0</b></div><div class="bar"><span id="smallBar"></span><i id="largeBar"></i></div><div class="bar-labels"><span><i class="cyan"></i>Small <b id="smallCount">0</b></span><span><i class="violet"></i>Large <b id="largeCount">0</b></span></div><p class="policy">Policy combines prompt complexity, SLA, and live queue depth. Every decision includes a human-readable reason.</p></article>
+      <article class="panel activity" id="activity"><div class="panel-head"><div><p class="eyebrow">SYSTEM LOG</p><h2>Live activity</h2></div><span class="pulse">STREAMING</span></div><div id="events"><p class="empty">Waiting for activity…</p></div></article></section>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js?v=2"></script>
+</body></html>
