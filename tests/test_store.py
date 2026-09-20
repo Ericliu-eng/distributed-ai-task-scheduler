@@ -31,3 +31,14 @@ def test_retry_then_success():
     claim2 = store.claim("worker-small-01", "small")
     assert claim2["attempt"] == 2
     assert store.finish(task["id"], "worker-small-01", 2, "ok") is True
+
+def test_worker_heartbeat_is_visible():
+    store = make_store()
+    store.heartbeat("worker-small-01", "small", "busy", "task-123")
+    workers = store.list_workers()
+    assert workers == [{
+        "id": "worker-small-01", "tier": "small", "status": "busy",
+        "task_id": "task-123", "last_heartbeat": workers[0]["last_heartbeat"]
+    }]
+    store.mark_worker_offline("worker-small-01")
+    assert store.list_workers()[0]["status"] == "offline"

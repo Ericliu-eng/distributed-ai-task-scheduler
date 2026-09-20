@@ -3,7 +3,7 @@ import os
 import threading
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, select
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.router import route_task
 
@@ -43,6 +43,14 @@ class Event(Base):
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+class Worker(Base):
+    __tablename__ = "workers"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_tier: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="idle")
+    current_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_heartbeat: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
 def task_dict(task: Task) -> dict:
     def iso(value): return value.isoformat() if value else None
     # SQLite drops timezone metadata while PostgreSQL preserves it. Normalize both
@@ -63,7 +71,7 @@ def task_dict(task: Task) -> dict:
 class SchedulerStore:
     def __init__(self, database_url: str | None = None):
         url = database_url or os.getenv("DATABASE_URL", "sqlite:///./scheduler.db")
-        kwargs = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {}
+        kwargs = {"connect_args": {"check_same_thread": False, "timeout": 30}} if url.startswith("sqlite") else {}
         self.engine = create_engine(url, pool_pre_ping=True, **kwargs)
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         self.lock = threading.RLock()
@@ -93,14 +101,61 @@ class SchedulerStore:
     def claim(self, worker_id: str, tier: str) -> dict | None:
         with self.lock, self.Session.begin() as session:
             stmt = select(Task).where(Task.status == "queued", Task.route_tier == tier).order_by(Task.priority.desc(), Task.created_at.asc()).limit(1)
-            if self.engine.dialect.name == "postgresql": stmt = stmt.with_for_update(skip_locked=True)
+            if self.engine.dialect.name == "postgresql":
+                stmt = stmt.with_for_update(skip_locked=True)
             task = session.scalar(stmt)
             if not task: return None
-            task.status, task.worker_id, task.started_at = "running", worker_id, utcnow()
-            task.attempt += 1
-            task.error = None
+            if self.engine.dialect.name == "sqlite":
+                claimed = session.execute(
+                    update(Task).where(Task.id == task.id, Task.status == "queued").values(
+                        status="running", worker_id=worker_id, started_at=utcnow(),
+                        attempt=Task.attempt + 1, error=None
+                    )
+                )
+                if claimed.rowcount != 1:
+                    return None
+                session.flush()
+                session.refresh(task)
+            else:
+                task.status, task.worker_id, task.started_at = "running", worker_id, utcnow()
+                task.attempt += 1
+                task.error = None
             session.add(Event(task_id=task.id, kind="claimed", message=f"{worker_id} claimed attempt {task.attempt}"))
             return task_dict(task)
+
+    def heartbeat(self, worker_id: str, tier: str, status: str = "idle",
+                  task_id: str | None = None) -> None:
+        with self.Session.begin() as session:
+            worker = session.get(Worker, worker_id)
+            if worker is None:
+                worker = Worker(id=worker_id, model_tier=tier)
+                session.add(worker)
+            worker.model_tier = tier
+            worker.status = status
+            worker.current_task_id = task_id
+            worker.last_heartbeat = utcnow()
+
+    def mark_worker_offline(self, worker_id: str) -> None:
+        with self.Session.begin() as session:
+            worker = session.get(Worker, worker_id)
+            if worker:
+                worker.status = "offline"
+                worker.current_task_id = None
+                worker.last_heartbeat = utcnow()
+
+    def list_workers(self, stale_after_seconds: float = 8.0) -> list[dict]:
+        now = utcnow().replace(tzinfo=None)
+        with self.Session() as session:
+            rows = session.scalars(select(Worker).order_by(Worker.id)).all()
+            result = []
+            for worker in rows:
+                heartbeat = worker.last_heartbeat
+                age = (now - heartbeat.replace(tzinfo=None)).total_seconds()
+                status = "offline" if age > stale_after_seconds else worker.status
+                result.append({"id": worker.id, "tier": worker.model_tier, "status": status,
+                               "task_id": worker.current_task_id if status != "offline" else None,
+                               "last_heartbeat": heartbeat.isoformat()})
+            return result
 
     def finish(self, task_id: str, worker_id: str, attempt: int, result: str) -> bool:
         with self.lock, self.Session.begin() as session:

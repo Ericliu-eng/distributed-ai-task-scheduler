@@ -18,7 +18,7 @@ Browser / API client
      SQL task queue (SQLite locally, PostgreSQL in Docker)
         │                         │
         ▼                         ▼
- Small-tier worker          Large-tier worker
+ Small worker process       Large worker process
         └──────── result, retries, timing ────────┘
 ```
 
@@ -26,9 +26,20 @@ Browser / API client
 
 ### Local
 
+Install dependencies once, then start the three independent processes in separate terminals:
+
 ```bash
 python -m pip install -r requirements.txt
 python -m uvicorn app.api:app --reload
+MODEL_TIER=small WORKER_ID=worker-small-01 python -m worker.main
+MODEL_TIER=large WORKER_ID=worker-large-01 python -m worker.main
+```
+
+PowerShell worker commands:
+
+```powershell
+$env:MODEL_TIER="small"; $env:WORKER_ID="worker-small-01"; python -m worker.main
+$env:MODEL_TIER="large"; $env:WORKER_ID="worker-large-01"; python -m worker.main
 ```
 
 Open **http://localhost:8000** and click **Run 90-sec demo**. API documentation is at `/docs`.
@@ -39,7 +50,7 @@ Open **http://localhost:8000** and click **Run 90-sec demo**. API documentation 
 docker compose up --build
 ```
 
-The app waits for PostgreSQL health, creates its schema, starts two worker loops, and serves the same dashboard at **http://localhost:8000**.
+Compose waits for PostgreSQL health, then starts the API and two tier-affine worker containers. The dashboard is served at **http://localhost:8000**.
 
 ## Demo script
 
@@ -88,7 +99,7 @@ Tests cover routing, idempotency, retry, priority claims, and fencing-token reje
 
 ## Known limitations and next steps
 
-- The two demo workers run as threads in the API container; split them into independent services for crash isolation.
+- Worker state is reported through database heartbeats; lease expiry and automatic reassignment are the next reliability milestone.
 - PostgreSQL is used for transactional state management, not claimed as universally superior to dedicated brokers.
 - Add heartbeat/lease expiry and a recovery monitor for worker crash recovery.
 - Replace mock inference with provider adapters and measure cost/quality on a fixed, programmatically graded benchmark.

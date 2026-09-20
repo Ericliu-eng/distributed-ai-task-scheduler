@@ -1,0 +1,1 @@
+"""Independent task worker process."""
