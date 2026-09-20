@@ -23,6 +23,30 @@ services:
     depends_on:
       db:
         condition: service_healthy
+  worker-small:
+    build: .
+    command: ["python", "-m", "worker.main"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://scheduler:scheduler@db:5432/scheduler
+      WORKER_ID: worker-small-01
+      MODEL_TIER: small
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  worker-large:
+    build: .
+    command: ["python", "-m", "worker.main"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://scheduler:scheduler@db:5432/scheduler
+      WORKER_ID: worker-large-01
+      MODEL_TIER: large
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
