@@ -6,18 +6,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.scheduler import WorkerPool
 from app.store import SchedulerStore
 
 store = SchedulerStore()
-workers = WorkerPool(store)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     store.init()
-    workers.start()
     yield
-    workers.stop()
 
 app = FastAPI(title="Distributed AI Task Scheduler", version="1.0.0", lifespan=lifespan)
 static_dir = Path(__file__).parent / "static"
@@ -36,7 +32,8 @@ def dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "workers": len(workers.snapshot())}
+    worker_rows = store.list_workers()
+    return {"status": "ok", "workers": sum(w["status"] != "offline" for w in worker_rows)}
 
 @app.post("/tasks", status_code=201)
 def create_task(payload: TaskCreate, response: Response):
@@ -63,7 +60,7 @@ def metrics():
 
 @app.get("/workers")
 def worker_status():
-    return workers.snapshot()
+    return store.list_workers()
 
 @app.get("/events")
 def event_feed():

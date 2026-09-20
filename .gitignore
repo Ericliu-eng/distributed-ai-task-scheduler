@@ -5,3 +5,7 @@ __pycache__/
 .runtime/
 .env
 scheduler.db
+
+*.db-journal
+*.db-wal
+*.db-shm
