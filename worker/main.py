@@ -16,13 +16,16 @@ log = logging.getLogger("scheduler-worker")
 
 class WorkerService:
     def __init__(self, store: SchedulerStore, worker_id: str, tier: str,
-                 poll_interval: float = 0.25):
+                 poll_interval: float = 0.25, lease_seconds: float = 15.0,
+                 renew_interval: float = 3.0):
         if tier not in {"small", "large"}:
             raise ValueError("MODEL_TIER must be 'small' or 'large'")
         self.store = store
         self.worker_id = worker_id
         self.tier = tier
         self.poll_interval = poll_interval
+        self.lease_seconds = lease_seconds
+        self.renew_interval = renew_interval
         self.stop_event = threading.Event()
 
     def stop(self, *_):
@@ -30,11 +33,18 @@ class WorkerService:
 
     def run_once(self, delay: bool = True) -> bool:
         self.store.heartbeat(self.worker_id, self.tier, "idle")
-        task = self.store.claim(self.worker_id, self.tier)
+        task = self.store.claim(self.worker_id, self.tier, self.lease_seconds)
         if task is None:
             return False
         self.store.heartbeat(self.worker_id, self.tier, "busy", task["id"])
         log.info("claimed task=%s attempt=%s tier=%s", task["id"], task["attempt"], self.tier)
+        renewal_stop = threading.Event()
+        renewal_thread = threading.Thread(
+            target=self._renew_while_running,
+            args=(task["id"], task["attempt"], renewal_stop),
+            daemon=True,
+        )
+        renewal_thread.start()
         try:
             if self.store.should_fail(task["id"], task["attempt"]):
                 if delay:
@@ -50,8 +60,22 @@ class WorkerService:
             outcome = self.store.fail_or_retry(task["id"], self.worker_id, task["attempt"], str(exc))
             log.warning("task=%s failed outcome=%s error=%s", task["id"], outcome, exc)
         finally:
+            renewal_stop.set()
+            renewal_thread.join(timeout=self.renew_interval + 1)
             self.store.heartbeat(self.worker_id, self.tier, "idle")
         return True
+
+    def _renew_while_running(self, task_id: str, attempt: int,
+                             renewal_stop: threading.Event) -> None:
+        while not renewal_stop.wait(self.renew_interval):
+            renewed = self.store.renew_lease(
+                task_id, self.worker_id, attempt, self.lease_seconds
+            )
+            if not renewed:
+                log.warning("lease renewal rejected task=%s attempt=%s", task_id, attempt)
+                return
+            self.store.heartbeat(self.worker_id, self.tier, "busy", task_id)
+            log.debug("renewed lease task=%s attempt=%s", task_id, attempt)
 
     def run_forever(self):
         self.store.init()
@@ -69,7 +93,11 @@ class WorkerService:
 def main():
     tier = os.getenv("MODEL_TIER", "small").lower()
     worker_id = os.getenv("WORKER_ID", f"worker-{tier}-01")
-    service = WorkerService(SchedulerStore(), worker_id, tier)
+    service = WorkerService(
+        SchedulerStore(), worker_id, tier,
+        lease_seconds=float(os.getenv("LEASE_SECONDS", "15")),
+        renew_interval=float(os.getenv("LEASE_RENEW_INTERVAL", "3")),
+    )
     signal.signal(signal.SIGINT, service.stop)
     signal.signal(signal.SIGTERM, service.stop)
     service.run_forever()
