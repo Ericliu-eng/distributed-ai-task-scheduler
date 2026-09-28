@@ -23,6 +23,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
   worker-small:
     build: .
     command: ["python", "-m", "worker.main"]
@@ -30,9 +35,11 @@ services:
       DATABASE_URL: postgresql+psycopg://scheduler:scheduler@db:5432/scheduler
       WORKER_ID: worker-small-01
       MODEL_TIER: small
+      LEASE_SECONDS: "15"
+      LEASE_RENEW_INTERVAL: "3"
       PYTHONUNBUFFERED: "1"
     depends_on:
-      db:
+      app:
         condition: service_healthy
     restart: unless-stopped
   worker-large:
@@ -42,9 +49,22 @@ services:
       DATABASE_URL: postgresql+psycopg://scheduler:scheduler@db:5432/scheduler
       WORKER_ID: worker-large-01
       MODEL_TIER: large
+      LEASE_SECONDS: "15"
+      LEASE_RENEW_INTERVAL: "3"
       PYTHONUNBUFFERED: "1"
     depends_on:
-      db:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+  recovery-monitor:
+    build: .
+    command: ["python", "-m", "monitor.recovery"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://scheduler:scheduler@db:5432/scheduler
+      RECOVERY_INTERVAL: "2"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      app:
         condition: service_healthy
     restart: unless-stopped
 
