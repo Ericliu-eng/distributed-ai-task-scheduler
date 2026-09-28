@@ -50,7 +50,7 @@ Open **http://localhost:8000** and click **Run 90-sec demo**. API documentation 
 docker compose up --build
 ```
 
-Compose waits for PostgreSQL health, then starts the API and two tier-affine worker containers. The dashboard is served at **http://localhost:8000**.
+Compose waits for PostgreSQL health, then starts the API, two tier-affine workers, and a lease recovery monitor. The dashboard is served at **http://localhost:8000**.
 
 ## Demo script
 
@@ -77,8 +77,8 @@ curl http://localhost:8000/metrics/summary
 
 - **Provider failure:** a retryable failure returns the task to `queued` until `max_attempts` is reached.
 - **Duplicate submission:** the unique idempotency key returns the existing logical task.
-- **Late write-back:** completion requires the same worker ID, attempt, and `running` state, so a stale owner cannot overwrite a newer result.
-- **Worker crash:** full lease/heartbeat recovery is intentionally post-MVP; the schema and fencing contract are ready for it.
+- **Late write-back:** completion and lease renewal require the same worker ID, attempt, and `running` state, so a stale owner cannot overwrite a newer result.
+- **Worker crash:** claims receive a 15-second lease that is renewed every 3 seconds. The monitor checks every 2 seconds and requeues expired work for a new attempt.
 
 ## Routing policy
 
@@ -95,11 +95,10 @@ Prompt length is a transparent MVP proxy, not a universal measure of difficulty.
 pytest -q
 ```
 
-Tests cover routing, idempotency, retry, priority claims, and fencing-token rejection.
+Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, and fencing-token rejection.
 
 ## Known limitations and next steps
 
-- Worker state is reported through database heartbeats; lease expiry and automatic reassignment are the next reliability milestone.
+- The additive startup migration handles the two lease columns; a production deployment should adopt a full migration framework before more schema changes.
 - PostgreSQL is used for transactional state management, not claimed as universally superior to dedicated brokers.
-- Add heartbeat/lease expiry and a recovery monitor for worker crash recovery.
 - Replace mock inference with provider adapters and measure cost/quality on a fixed, programmatically graded benchmark.

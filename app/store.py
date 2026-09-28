@@ -2,8 +2,9 @@ from __future__ import annotations
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, select, update
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, inspect, select, text, update
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.router import route_task
 
@@ -29,6 +30,8 @@ class Task(Base):
     attempt: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     fail_once: Mapped[bool] = mapped_column(Boolean, default=False)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recovery_count: Mapped[int] = mapped_column(Integer, default=0)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -64,7 +67,8 @@ def task_dict(task: Task) -> dict:
             "route_tier": task.route_tier, "route_reason": task.route_reason,
             "difficulty_score": round(task.difficulty_score, 3), "estimated_cost": task.estimated_cost,
             "status": task.status, "worker_id": task.worker_id, "attempt": task.attempt,
-            "max_attempts": task.max_attempts, "result": task.result, "error": task.error,
+            "max_attempts": task.max_attempts, "lease_until": iso(task.lease_until),
+            "recovery_count": task.recovery_count, "result": task.result, "error": task.error,
             "created_at": iso(task.created_at), "started_at": iso(task.started_at),
             "finished_at": iso(task.finished_at), "queue_ms": queue_ms, "run_ms": run_ms}
 
@@ -76,7 +80,33 @@ class SchedulerStore:
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         self.lock = threading.RLock()
 
-    def init(self): Base.metadata.create_all(self.engine)
+    def init(self):
+        Base.metadata.create_all(self.engine)
+        self._migrate_task_columns()
+
+    def _migrate_task_columns(self) -> None:
+        """Apply the two additive v1 columns to databases created by the MVP.
+
+        This keeps existing local SQLite files and PostgreSQL volumes usable without
+        introducing a migration framework solely for this additive schema change.
+        """
+        existing = {column["name"] for column in inspect(self.engine).get_columns("tasks")}
+        statements = []
+        if "lease_until" not in existing:
+            column_type = "TIMESTAMPTZ" if self.engine.dialect.name == "postgresql" else "DATETIME"
+            statements.append(f"ALTER TABLE tasks ADD COLUMN lease_until {column_type}")
+        if "recovery_count" not in existing:
+            statements.append("ALTER TABLE tasks ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0")
+        for statement in statements:
+            try:
+                with self.engine.begin() as connection:
+                    connection.execute(text(statement))
+            except (OperationalError, ProgrammingError) as exc:
+                # API and workers can start together. A concurrent process may have
+                # added the column after inspection; only ignore that exact race.
+                message = str(exc).lower()
+                if "duplicate column" not in message and "already exists" not in message:
+                    raise
 
     def _depths(self, session) -> tuple[int, int]:
         rows = session.execute(select(Task.route_tier, func.count()).where(Task.status == "queued").group_by(Task.route_tier)).all()
@@ -98,7 +128,7 @@ class SchedulerStore:
             session.add(Event(task_id=task.id, kind="routed", message=f"Routed to {d.tier.upper()}: {d.reason}"))
             return task_dict(task), True
 
-    def claim(self, worker_id: str, tier: str) -> dict | None:
+    def claim(self, worker_id: str, tier: str, lease_seconds: float = 15.0) -> dict | None:
         with self.lock, self.Session.begin() as session:
             stmt = select(Task).where(Task.status == "queued", Task.route_tier == tier).order_by(Task.priority.desc(), Task.created_at.asc()).limit(1)
             if self.engine.dialect.name == "postgresql":
@@ -109,6 +139,7 @@ class SchedulerStore:
                 claimed = session.execute(
                     update(Task).where(Task.id == task.id, Task.status == "queued").values(
                         status="running", worker_id=worker_id, started_at=utcnow(),
+                        lease_until=utcnow() + timedelta(seconds=lease_seconds),
                         attempt=Task.attempt + 1, error=None
                     )
                 )
@@ -118,10 +149,82 @@ class SchedulerStore:
                 session.refresh(task)
             else:
                 task.status, task.worker_id, task.started_at = "running", worker_id, utcnow()
+                task.lease_until = utcnow() + timedelta(seconds=lease_seconds)
                 task.attempt += 1
                 task.error = None
             session.add(Event(task_id=task.id, kind="claimed", message=f"{worker_id} claimed attempt {task.attempt}"))
             return task_dict(task)
+
+    def renew_lease(self, task_id: str, worker_id: str, attempt: int,
+                    lease_seconds: float = 15.0) -> bool:
+        """Extend a lease only if the caller still owns the exact attempt."""
+        with self.Session.begin() as session:
+            renewed = session.execute(
+                update(Task).where(
+                    Task.id == task_id,
+                    Task.worker_id == worker_id,
+                    Task.attempt == attempt,
+                    Task.status == "running",
+                ).values(lease_until=utcnow() + timedelta(seconds=lease_seconds))
+            )
+            return renewed.rowcount == 1
+
+    def get_expired_tasks(self, now: datetime | None = None) -> list[dict]:
+        cutoff = now or utcnow()
+        with self.Session() as session:
+            tasks = session.scalars(
+                select(Task).where(
+                    Task.status == "running",
+                    Task.lease_until.is_not(None),
+                    Task.lease_until < cutoff,
+                ).order_by(Task.lease_until.asc())
+            ).all()
+            return [task_dict(task) for task in tasks]
+
+    def requeue_stale_tasks(self, now: datetime | None = None) -> list[str]:
+        """Recover expired work without racing a concurrent lease renewal."""
+        cutoff = now or utcnow()
+        recovered: list[str] = []
+        with self.lock, self.Session.begin() as session:
+            stmt = select(Task).where(
+                Task.status == "running",
+                Task.lease_until.is_not(None),
+                Task.lease_until < cutoff,
+            ).order_by(Task.lease_until.asc())
+            if self.engine.dialect.name == "postgresql":
+                stmt = stmt.with_for_update(skip_locked=True)
+            for task in session.scalars(stmt).all():
+                previous_worker = task.worker_id
+                previous_attempt = task.attempt
+                if task.attempt >= task.max_attempts:
+                    values = {
+                        "status": "failed", "worker_id": None, "lease_until": None,
+                        "finished_at": cutoff, "error": "Lease expired after final attempt",
+                        "recovery_count": Task.recovery_count + 1,
+                    }
+                    event_kind = "failed"
+                    message = f"Lease expired on final attempt {previous_attempt}; task failed"
+                else:
+                    values = {
+                        "status": "queued", "worker_id": None, "lease_until": None,
+                        "started_at": None, "error": "Worker lease expired; task recovered",
+                        "recovery_count": Task.recovery_count + 1,
+                    }
+                    event_kind = "recovered"
+                    message = f"Recovered expired attempt {previous_attempt} from {previous_worker}"
+                changed = session.execute(
+                    update(Task).where(
+                        Task.id == task.id,
+                        Task.status == "running",
+                        Task.worker_id == previous_worker,
+                        Task.attempt == previous_attempt,
+                        Task.lease_until < cutoff,
+                    ).values(**values).execution_options(synchronize_session=False)
+                )
+                if changed.rowcount == 1:
+                    recovered.append(task.id)
+                    session.add(Event(task_id=task.id, kind=event_kind, message=message))
+        return recovered
 
     def heartbeat(self, worker_id: str, tier: str, status: str = "idle",
                   task_id: str | None = None) -> None:
@@ -162,6 +265,7 @@ class SchedulerStore:
             task = session.get(Task, task_id)
             if not task or task.status != "running" or task.worker_id != worker_id or task.attempt != attempt: return False
             task.status, task.result, task.finished_at = "succeeded", result, utcnow()
+            task.lease_until = None
             session.add(Event(task_id=task.id, kind="succeeded", message=f"{worker_id} completed the task"))
             return True
 
@@ -169,7 +273,7 @@ class SchedulerStore:
         with self.lock, self.Session.begin() as session:
             task = session.get(Task, task_id)
             if not task or task.status != "running" or task.worker_id != worker_id or task.attempt != attempt: return "fenced"
-            task.error, task.worker_id = error, None
+            task.error, task.worker_id, task.lease_until = error, None, None
             if task.attempt < task.max_attempts:
                 task.status = "queued"
                 session.add(Event(task_id=task.id, kind="retry", message=f"Attempt {task.attempt} failed; requeued"))
@@ -209,6 +313,7 @@ class SchedulerStore:
                 "success_rate": round((succeeded / terminal * 100) if terminal else 100, 1),
                 "small": sum(t["route_tier"] == "small" for t in tasks), "large": sum(t["route_tier"] == "large" for t in tasks),
                 "retries": sum(max(0, t["attempt"] - 1) for t in tasks), "estimated_cost": round(spent, 3),
+                "recoveries": sum(t["recovery_count"] for t in tasks),
                 "all_large_cost": round(total * 0.018, 3),
                 "cost_saved_pct": round((1 - spent / (total * 0.018)) * 100, 1) if total else 0,
                 "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else 0}
