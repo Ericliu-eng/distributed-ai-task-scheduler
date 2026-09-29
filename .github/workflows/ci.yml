@@ -44,8 +44,7 @@ jobs:
         run: python -m compileall -q app worker monitor
 
       - name: Run unit and PostgreSQL concurrency tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
-
