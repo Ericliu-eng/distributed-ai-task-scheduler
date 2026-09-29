@@ -96,6 +96,7 @@ pytest -q
 ```
 
 Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, and fencing-token rejection.
+Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
 
 ## Known limitations and next steps
 
