@@ -2,6 +2,8 @@
 
 Orbit is a demo-ready multi-worker inference scheduler that routes each request to a small or large model tier using prompt difficulty, SLA, and live queue pressure. Every decision is explainable, workers execute concurrently, failed calls retry automatically, and the dashboard quantifies latency, reliability, routing mix, and estimated savings.
 
+Reference queue benchmark: **1,000/1,000 tasks completed**, **129.7 tasks/s**, and **10,392 ms p99 queue latency** with eight workers on a local PostgreSQL 16 burst workload. See the methodology and limitations below before comparing these numbers.
+
 ## Why this design
 
 AI requests are not equally difficult or urgent, but a naive gateway sends everything to one expensive model. Orbit separates routing from execution. A deterministic policy makes the cost/latency decision auditable; a transactional task store makes state changes observable; tier-affine workers consume the queue independently. The execution contract is **at-least-once**, with idempotency keys preventing duplicate logical submissions and the claim attempt acting as a fencing token on write-back.
@@ -97,6 +99,38 @@ pytest -q
 
 Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, and fencing-token rejection.
 Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
+
+## Performance benchmark
+
+Run a disposable SQLite benchmark locally:
+
+```bash
+python -m bench.run --tasks 200 --workers 8
+```
+
+The JSON output records throughput and p50/p95/p99 queue and total latency, plus task counts and routing distribution. For a PostgreSQL measurement, create a dedicated disposable database and run:
+
+```bash
+BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_benchmark \
+  python -m bench.run --tasks 1000 --workers 8 --allow-reset --output benchmark-results.json
+```
+
+The safety flag is required because the benchmark clears task and event rows before every run. Never point it at the demo or production database.
+
+### Reference result
+
+| Workload | Result |
+| --- | ---: |
+| Tasks completed | 1,000 / 1,000 |
+| Workers | 8 |
+| Tier distribution | 500 small / 500 large |
+| Throughput | 129.7 tasks/s |
+| Queue latency p50 | 6,076.5 ms |
+| Queue latency p95 | 9,853.55 ms |
+| Queue latency p99 | 10,392.02 ms |
+| Total latency p99 | 10,419.04 ms |
+
+This is a single local Windows 11 / Python 3.13.12 / PostgreSQL 16 run using mock inference with provider delay disabled. Tasks are submitted as a burst and pinned to a 50/50 tier distribution so all eight workers participate; queue latency starts at each task's creation time and therefore includes time spent waiting behind the burst. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](bench/results/postgres-1000-tasks.json); rerun the benchmark on the target hardware before using the number in a resume.
 
 ## Known limitations and next steps
 
