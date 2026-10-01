@@ -5,7 +5,7 @@ from bench.evaluate import evaluate, grade, load_cases
 
 def test_fixed_dataset_has_expected_shape():
     cases = load_cases()
-    assert len(cases) == 51
+    assert len(cases) == 50
     assert len({case.id for case in cases}) == 50
     assert Counter(case.category for case in cases) == {
         "arithmetic": 15,
