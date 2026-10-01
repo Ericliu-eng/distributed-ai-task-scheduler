@@ -97,7 +97,7 @@ Prompt length is a transparent MVP proxy, not a universal measure of difficulty.
 pytest -q
 ```
 
-Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, and fencing-token rejection.
+Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, fencing-token rejection, benchmark statistics, all four graders, and the reference cost-quality result.
 Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
 
 ## Performance benchmark
@@ -132,8 +132,27 @@ The safety flag is required because the benchmark clears task and event rows bef
 
 This is a single local Windows 11 / Python 3.13.12 / PostgreSQL 16 run using mock inference with provider delay disabled. Tasks are submitted as a burst and pinned to a 50/50 tier distribution so all eight workers participate; queue latency starts at each task's creation time and therefore includes time spent waiting behind the burst. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](bench/results/postgres-1000-tasks.json); rerun the benchmark on the target hardware before using the number in a resume.
 
+## Routing cost-quality evaluation
+
+The repository includes a fixed 50-case dataset with arithmetic, structured extraction, classification, and executable code graders. Compare the all-large baseline with multiple routing thresholds:
+
+```bash
+python -m bench.evaluate --output bench/results/routing-evaluation.json
+```
+
+At the default `0.55` difficulty threshold, the deterministic fixture adapter retains **90%** of the all-large baseline score while reducing estimated cost by **50%** (30 small / 20 large). The full threshold curve and failed case IDs are stored in [`bench/results/routing-evaluation.json`](bench/results/routing-evaluation.json).
+
+| Difficulty threshold | Quality retention | Cost saving | Small / large |
+| ---: | ---: | ---: | ---: |
+| 0.30 | 96% | 45% | 27 / 23 |
+| 0.45 | 90% | 50% | 30 / 20 |
+| 0.55 | 90% | 50% | 30 / 20 |
+| 0.70 | 50% | 83.33% | 50 / 0 |
+
+This fixture adapter makes routing, grading, and cost accounting deterministic and CI-safe; it is not evidence of real LLM quality. Before placing quality retention on a resume, run the unchanged dataset and graders through real small- and large-model provider adapters.
+
 ## Known limitations and next steps
 
 - The additive startup migration handles the two lease columns; a production deployment should adopt a full migration framework before more schema changes.
 - PostgreSQL is used for transactional state management, not claimed as universally superior to dedicated brokers.
-- Replace mock inference with provider adapters and measure cost/quality on a fixed, programmatically graded benchmark.
+- Replace deterministic fixture responses with real provider adapters before treating the routing evaluation as evidence of model quality.

@@ -1,0 +1,110 @@
+{
+  "measured_at": "2026-10-01T02:44:05.295927+00:00",
+  "provider": "deterministic fixture adapter",
+  "dataset_size": 50,
+  "baseline": {
+    "strategy": "all-large",
+    "correct": 50,
+    "accuracy_pct": 100.0,
+    "estimated_cost": 0.9
+  },
+  "threshold_runs": [
+    {
+      "difficulty_threshold": 0.3,
+      "correct": 48,
+      "accuracy_pct": 96.0,
+      "quality_retention_pct": 96.0,
+      "estimated_cost": 0.495,
+      "cost_saving_pct": 45.0,
+      "routing": {
+        "small": 27,
+        "large": 23
+      },
+      "failed_case_ids": [
+        "numeric-015",
+        "code-010"
+      ]
+    },
+    {
+      "difficulty_threshold": 0.45,
+      "correct": 45,
+      "accuracy_pct": 90.0,
+      "quality_retention_pct": 90.0,
+      "estimated_cost": 0.45,
+      "cost_saving_pct": 50.0,
+      "routing": {
+        "small": 30,
+        "large": 20
+      },
+      "failed_case_ids": [
+        "numeric-014",
+        "numeric-015",
+        "json-015",
+        "exact-010",
+        "code-010"
+      ]
+    },
+    {
+      "difficulty_threshold": 0.55,
+      "correct": 45,
+      "accuracy_pct": 90.0,
+      "quality_retention_pct": 90.0,
+      "estimated_cost": 0.45,
+      "cost_saving_pct": 50.0,
+      "routing": {
+        "small": 30,
+        "large": 20
+      },
+      "failed_case_ids": [
+        "numeric-014",
+        "numeric-015",
+        "json-015",
+        "exact-010",
+        "code-010"
+      ]
+    },
+    {
+      "difficulty_threshold": 0.7,
+      "correct": 25,
+      "accuracy_pct": 50.0,
+      "quality_retention_pct": 50.0,
+      "estimated_cost": 0.15,
+      "cost_saving_pct": 83.33,
+      "routing": {
+        "small": 50,
+        "large": 0
+      },
+      "failed_case_ids": [
+        "numeric-009",
+        "numeric-010",
+        "numeric-011",
+        "numeric-012",
+        "numeric-013",
+        "numeric-014",
+        "numeric-015",
+        "json-008",
+        "json-009",
+        "json-010",
+        "json-011",
+        "json-012",
+        "json-013",
+        "json-014",
+        "json-015",
+        "exact-006",
+        "exact-007",
+        "exact-008",
+        "exact-009",
+        "exact-010",
+        "code-006",
+        "code-007",
+        "code-008",
+        "code-009",
+        "code-010"
+      ]
+    }
+  ],
+  "limitations": [
+    "Fixture responses validate routing, grading, and cost accounting, not real LLM quality.",
+    "Run the same fixed dataset through provider adapters before using quality claims on a resume."
+  ]
+}

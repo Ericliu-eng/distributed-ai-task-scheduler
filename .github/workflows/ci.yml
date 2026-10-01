@@ -49,5 +49,8 @@ jobs:
       - name: Smoke-test benchmark runner
         run: python -m bench.run --tasks 24 --workers 4
 
+      - name: Run routing cost-quality evaluation
+        run: python -m bench.evaluate --output bench/results/routing-evaluation.json
+
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
