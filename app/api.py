@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.store import SchedulerStore
+from app.benchmarks import load_result
 
 store = SchedulerStore()
 
@@ -65,6 +66,11 @@ def worker_status():
 @app.get("/events")
 def event_feed():
     return store.events()
+
+@app.get("/benchmarks/{kind}")
+def benchmark_report(kind: str):
+    """Return saved evidence independently of live queue/database availability."""
+    return load_result(kind)
 
 @app.post("/demo/reset")
 def reset_demo():
