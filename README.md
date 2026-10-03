@@ -93,7 +93,10 @@ Prompt length is a transparent MVP proxy, not a universal measure of difficulty.
 
 ## Verification
 
+`requirements.txt` holds only runtime dependencies (it is what the Docker image installs); test tooling lives in `requirements-dev.txt`.
+
 ```bash
+python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
