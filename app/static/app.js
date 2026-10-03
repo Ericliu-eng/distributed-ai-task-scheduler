@@ -41,6 +41,20 @@ function renderWorkers(workers) {
     </div>`).join('');
 }
 
+function setSystemState(state, label) {
+  const card = $('#systemCard');
+  card.classList.toggle('degraded', state === 'degraded');
+  card.classList.toggle('offline', state === 'offline');
+  $('#systemLabel').textContent = label;
+}
+
+function renderSystem(workers) {
+  const online = workers.filter((w) => w.status !== 'offline').length;
+  $('#workerCount').textContent = `${online} / ${workers.length}`;
+  if (online) setSystemState('online', 'SYSTEM ONLINE');
+  else setSystemState('degraded', 'NO WORKERS ONLINE');
+}
+
 function renderTasks(tasks) {
   const shown = currentFilter === 'all' ? tasks : tasks.filter((t) => t.status === currentFilter);
   if (!shown.length) {
@@ -82,10 +96,48 @@ async function refresh() {
     ]);
     renderMetrics(metrics);
     renderWorkers(workers);
+    renderSystem(workers);
     renderTasks(tasks);
     renderEvents(events);
   } catch (err) {
     console.error(err);
+    $('#workerCount').textContent = '—';
+    setSystemState('offline', 'API UNREACHABLE');
+  }
+}
+
+const number = (value, digits = 0) => Number(value).toLocaleString(undefined, {maximumFractionDigits: digits});
+
+function renderPerformance(report) {
+  $('#perfDatabase').textContent = report.database.toUpperCase();
+  $('#perfThroughput').innerHTML = `${number(report.throughput_tasks_per_second, 1)}<span>tasks/s</span>`;
+  $('#perfCompleted').textContent = `${number(report.tasks_succeeded)} / ${number(report.tasks_submitted)}`;
+  $('#perfP50').textContent = `${number(report.queue_latency_ms.p50)}ms`;
+  $('#perfP99').textContent = `${number(report.queue_latency_ms.p99)}ms`;
+  const measured = new Date(report.measured_at).toLocaleDateString();
+  $('#perfMeta').textContent = `${report.workers} workers · ${report.workload} · ${report.execution_mode}. `
+    + `Queue latency includes time waiting behind the burst. Measured ${measured} on ${report.platform}.`;
+}
+
+function renderRouting(report) {
+  $('#routingProvider').textContent = report.provider.toUpperCase();
+  $('#routingRows').innerHTML = report.threshold_runs.map((run) => `
+    <tr>
+      <td>${Number(run.difficulty_threshold).toFixed(2)}</td>
+      <td>${number(run.quality_retention_pct, 2)}%</td>
+      <td>${number(run.cost_saving_pct, 2)}%</td>
+      <td>${run.routing.small} / ${run.routing.large}</td>
+    </tr>`).join('');
+  $('#routingMeta').textContent = `${report.dataset_size} graded cases vs. an all-large baseline `
+    + `(${report.baseline.correct} correct). ${report.limitations[0]}`;
+}
+
+async function loadReport(kind, render, showUnavailable) {
+  try {
+    render(await api(`/benchmarks/${kind}`));
+  } catch (err) {
+    console.error(err);
+    showUnavailable();
   }
 }
 
@@ -150,3 +202,10 @@ document.addEventListener('keydown', (e) => {
 
 refresh();
 setInterval(refresh, 850);
+// Saved reports are static files, so they load once rather than on every poll.
+loadReport('performance', renderPerformance, () => {
+  $('#perfMeta').textContent = 'Saved performance report unavailable.';
+});
+loadReport('routing', renderRouting, () => {
+  $('#routingRows').innerHTML = '<tr><td colspan="4" class="empty">Saved routing report unavailable.</td></tr>';
+});

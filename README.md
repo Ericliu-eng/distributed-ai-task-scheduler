@@ -71,9 +71,13 @@ curl -X POST http://localhost:8000/tasks \
 
 curl http://localhost:8000/tasks/{task_id}
 curl http://localhost:8000/metrics/summary
+curl http://localhost:8000/benchmarks/performance
+curl http://localhost:8000/benchmarks/routing
 ```
 
 `POST /tasks` returns the task ID, initial state, selected tier, and route reason. Reusing an `idempotency_key` returns the existing task instead of creating another.
+
+`GET /benchmarks/{performance|routing}` serves the saved reports from `bench/results/` without touching the queue; the dashboard's Benchmarks section renders both.
 
 ## Failure semantics
 
@@ -100,7 +104,7 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, fencing-token rejection, benchmark statistics, all four graders, and the reference cost-quality result.
+Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, fencing-token rejection, benchmark statistics, saved benchmark reports, all four graders, and the reference cost-quality result.
 Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
 
 ## Performance benchmark

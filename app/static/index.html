@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=3">
 </head>
 <body>
   <div class="grain"></div>
@@ -20,14 +20,15 @@
       <a class="active">⌁ <span>Control room</span></a>
       <a href="#queue">≡ <span>Task queue</span></a>
       <a href="#activity">⌁ <span>Activity</span></a>
+      <a href="#benchmarks">∑ <span>Benchmarks</span></a>
       <a href="/docs" target="_blank">↗ <span>API docs</span></a>
     </nav>
-    <div class="system-card">
-      <div><span class="live-dot"></span>SYSTEM ONLINE</div>
-      <strong>2 / 2</strong>
-      <small>workers available</small>
+    <div class="system-card" id="systemCard">
+      <div><span class="live-dot"></span><span id="systemLabel">CONNECTING</span></div>
+      <strong id="workerCount">—</strong>
+      <small>workers online</small>
     </div>
-    <div class="version">HACKATHON MVP <span>v1.0</span></div>
+    <div class="version">VERSION <span>v1.0</span></div>
   </aside>
 
   <main>
@@ -170,9 +171,49 @@
         <div id="events"><p class="empty">Waiting for activity…</p></div>
       </article>
     </section>
+
+    <section class="bench-grid" id="benchmarks">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">SAVED BENCHMARK</p>
+            <h2>Queue performance</h2>
+          </div>
+          <span class="shortcut" id="perfDatabase">—</span>
+        </div>
+        <div class="bench-stats">
+          <div><label>THROUGHPUT</label><strong id="perfThroughput">—</strong></div>
+          <div><label>COMPLETED</label><strong id="perfCompleted">—</strong></div>
+          <div><label>QUEUE P50</label><strong id="perfP50">—</strong></div>
+          <div><label>QUEUE P99</label><strong id="perfP99">—</strong></div>
+        </div>
+        <p class="policy" id="perfMeta">Loading saved report…</p>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">ROUTING EVALUATION</p>
+            <h2>Cost vs. quality</h2>
+          </div>
+          <span class="shortcut" id="routingProvider">—</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>THRESHOLD</th><th>QUALITY RETAINED</th><th>COST SAVED</th><th>SMALL / LARGE</th></tr>
+            </thead>
+            <tbody id="routingRows">
+              <tr><td colspan="4" class="empty">Loading saved report…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="policy" id="routingMeta"></p>
+      </article>
+    </section>
   </main>
 
   <div id="toast" class="toast"></div>
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

@@ -140,6 +140,24 @@ nav a.active {
   font-size: 10px;
 }
 
+.system-card.degraded div {
+  color: var(--amber);
+}
+
+.system-card.degraded .live-dot {
+  background: var(--amber);
+  box-shadow: 0 0 8px var(--amber);
+}
+
+.system-card.offline div {
+  color: var(--red);
+}
+
+.system-card.offline .live-dot {
+  background: var(--red);
+  box-shadow: 0 0 8px var(--red);
+}
+
 .version {
   font: 9px DM Mono;
   color: #515a6a;
@@ -445,6 +463,10 @@ input[type=range] {
   color: var(--amber);
 }
 
+.worker .status.offline {
+  color: var(--red);
+}
+
 .routing-legend {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -690,6 +712,47 @@ td:first-child {
   color: #aab2c0;
 }
 
+.bench-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.bench-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.bench-stats > div {
+  background: #0a0d13;
+  border: 1px solid #1c2330;
+  border-radius: 8px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.bench-stats label {
+  font: 9px DM Mono;
+  color: var(--muted);
+  letter-spacing: .1em;
+}
+
+.bench-stats strong {
+  display: block;
+  font-size: 20px;
+  letter-spacing: -.03em;
+  margin-top: 7px;
+  white-space: nowrap;
+}
+
+.bench-stats strong span {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
 .toast {
   position: fixed;
   right: 25px;
@@ -722,7 +785,8 @@ td:first-child {
   }
 
   .grid-top,
-  .bottom-grid {
+  .bottom-grid,
+  .bench-grid {
     grid-template-columns: 1fr;
   }
 
@@ -758,6 +822,10 @@ td:first-child {
 
   .routing-legend {
     grid-template-columns: 1fr;
+  }
+
+  .bench-stats {
+    grid-template-columns: 1fr 1fr;
   }
 
   h1 {
