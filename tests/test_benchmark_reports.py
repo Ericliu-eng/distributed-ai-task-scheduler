@@ -16,12 +16,16 @@ def test_api_route_serves_saved_reports():
 def test_saved_reports_are_served_by_kind():
     performance = load_result("performance")
     routing = load_result("routing")
+    recovery = load_result("recovery")
 
     assert performance["tasks_succeeded"] == performance["tasks_submitted"]
     assert set(performance["queue_latency_ms"]) == {"p50", "p95", "p99"}
     assert routing["dataset_size"] == 50
     assert routing["threshold_runs"]
     assert routing["limitations"]
+    assert recovery["tasks_succeeded"] == recovery["trials"]
+    assert recovery["stale_writes_rejected"] == recovery["trials"]
+    assert "crash_to_completion_ms" in recovery["timings_ms"]
 
 
 @pytest.mark.parametrize("kind", ["unknown", "../app/store", "postgres-1000-tasks.json"])

@@ -1,0 +1,43 @@
+{
+  "measured_at": "2026-10-04T19:37:25.183675+00:00",
+  "database": "postgresql",
+  "python": "3.11.0",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "trials": 20,
+  "tasks_succeeded": 20,
+  "stale_writes_rejected": 20,
+  "lease_seconds": 0.2,
+  "recovery_poll_interval_seconds": 0.02,
+  "execution_mode": "worker subprocess exits after claim; replacement uses mock inference without provider delay",
+  "timings_ms": {
+    "crash_to_detection_ms": {
+      "p50": 167.36,
+      "p95": 184.16,
+      "p99": 186.3
+    },
+    "lease_expiry_to_detection_ms": {
+      "p50": 29.07,
+      "p95": 48.42,
+      "p99": 50.67
+    },
+    "detection_to_reclaim_ms": {
+      "p50": 6.35,
+      "p95": 7.84,
+      "p99": 8.25
+    },
+    "reclaim_to_completion_ms": {
+      "p50": 4.39,
+      "p95": 5.66,
+      "p99": 6.01
+    },
+    "crash_to_completion_ms": {
+      "p50": 177.68,
+      "p95": 197.12,
+      "p99": 197.54
+    }
+  },
+  "limitations": [
+    "Measures scheduler, database, and configured lease/poll timing on one local host.",
+    "Provider inference delay and container restart/orchestrator scheduling are excluded."
+  ]
+}

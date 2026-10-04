@@ -64,4 +64,4 @@ def test_startup_migrates_existing_mvp_database(tmp_path):
     store = SchedulerStore(f"sqlite:///{path}")
     store.init()
     columns = {column["name"] for column in inspect(store.engine).get_columns("tasks")}
-    assert {"lease_until", "recovery_count"}.issubset(columns)
+    assert {"lease_until", "recovery_count", "next_attempt_at"}.issubset(columns)
