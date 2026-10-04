@@ -3,8 +3,8 @@ import os
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, inspect, select, text, update
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, case, create_engine, func, inspect, select, text, update
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.router import route_task
 
@@ -115,18 +115,29 @@ class SchedulerStore:
 
     def create_task(self, prompt: str, sla: str = "standard", priority: int = 5,
                     idempotency_key: str | None = None, fail_once: bool = False) -> tuple[dict, bool]:
-        with self.lock, self.Session.begin() as session:
-            if idempotency_key:
-                existing = session.scalar(select(Task).where(Task.idempotency_key == idempotency_key))
-                if existing: return task_dict(existing), False
-            small, large = self._depths(session)
-            d = route_task(prompt, sla, small, large)
-            task = Task(id=str(uuid.uuid4()), prompt=prompt, sla=sla, priority=priority,
-                        idempotency_key=idempotency_key, route_tier=d.tier, route_reason=d.reason,
-                        difficulty_score=d.difficulty, estimated_cost=d.estimated_cost, fail_once=fail_once)
-            session.add(task)
-            session.add(Event(task_id=task.id, kind="routed", message=f"Routed to {d.tier.upper()}: {d.reason}"))
-            return task_dict(task), True
+        try:
+            with self.lock, self.Session.begin() as session:
+                if idempotency_key is not None:
+                    existing = session.scalar(select(Task).where(Task.idempotency_key == idempotency_key))
+                    if existing: return task_dict(existing), False
+                small, large = self._depths(session)
+                d = route_task(prompt, sla, small, large)
+                task = Task(id=str(uuid.uuid4()), prompt=prompt, sla=sla, priority=priority,
+                            idempotency_key=idempotency_key, route_tier=d.tier, route_reason=d.reason,
+                            difficulty_score=d.difficulty, estimated_cost=d.estimated_cost, fail_once=fail_once)
+                session.add(task)
+                session.add(Event(task_id=task.id, kind="routed", message=f"Routed to {d.tier.upper()}: {d.reason}"))
+                # Apply defaults and detect uniqueness conflicts before serializing.
+                session.flush()
+                return task_dict(task), True
+        except IntegrityError:
+            # Another API process may win after our initial lookup. The failed
+            # transaction (including its routed event) has rolled back here.
+            if idempotency_key is not None:
+                with self.Session() as session:
+                    existing = session.scalar(select(Task).where(Task.idempotency_key == idempotency_key))
+                    if existing: return task_dict(existing), False
+            raise
 
     def claim(self, worker_id: str, tier: str, lease_seconds: float = 15.0) -> dict | None:
         with self.lock, self.Session.begin() as session:
@@ -262,25 +273,40 @@ class SchedulerStore:
 
     def finish(self, task_id: str, worker_id: str, attempt: int, result: str) -> bool:
         with self.lock, self.Session.begin() as session:
-            task = session.get(Task, task_id)
-            if not task or task.status != "running" or task.worker_id != worker_id or task.attempt != attempt: return False
-            task.status, task.result, task.finished_at = "succeeded", result, utcnow()
-            task.lease_until = None
-            session.add(Event(task_id=task.id, kind="succeeded", message=f"{worker_id} completed the task"))
+            # Ownership must be checked by the write itself: a Python lock only
+            # protects this store instance, not recovery/worker processes.
+            changed = session.execute(
+                update(Task).where(
+                    Task.id == task_id, Task.worker_id == worker_id,
+                    Task.attempt == attempt, Task.status == "running",
+                ).values(status="succeeded", result=result, finished_at=utcnow(), lease_until=None)
+                .execution_options(synchronize_session=False)
+            )
+            if changed.rowcount != 1: return False
+            session.add(Event(task_id=task_id, kind="succeeded", message=f"{worker_id} completed the task"))
             return True
 
     def fail_or_retry(self, task_id: str, worker_id: str, attempt: int, error: str) -> str:
         with self.lock, self.Session.begin() as session:
-            task = session.get(Task, task_id)
-            if not task or task.status != "running" or task.worker_id != worker_id or task.attempt != attempt: return "fenced"
-            task.error, task.worker_id, task.lease_until = error, None, None
-            if task.attempt < task.max_attempts:
-                task.status = "queued"
-                session.add(Event(task_id=task.id, kind="retry", message=f"Attempt {task.attempt} failed; requeued"))
-                return "queued"
-            task.status, task.finished_at = "failed", utcnow()
-            session.add(Event(task_id=task.id, kind="failed", message=f"Failed after {task.attempt} attempts"))
-            return "failed"
+            retryable = Task.attempt < Task.max_attempts
+            changed = session.execute(
+                update(Task).where(
+                    Task.id == task_id, Task.worker_id == worker_id,
+                    Task.attempt == attempt, Task.status == "running",
+                ).values(
+                    error=error, worker_id=None, lease_until=None,
+                    status=case((retryable, "queued"), else_="failed"),
+                    finished_at=case((retryable, None), else_=utcnow()),
+                ).execution_options(synchronize_session=False)
+            )
+            if changed.rowcount != 1: return "fenced"
+            # The UPDATE holds the row's write lock until this transaction commits.
+            status = session.scalar(select(Task.status).where(Task.id == task_id))
+            kind = "retry" if status == "queued" else "failed"
+            message = (f"Attempt {attempt} failed; requeued" if status == "queued"
+                       else f"Failed after {attempt} attempts")
+            session.add(Event(task_id=task_id, kind=kind, message=message))
+            return status
 
     def should_fail(self, task_id: str, attempt: int) -> bool:
         with self.Session() as session:

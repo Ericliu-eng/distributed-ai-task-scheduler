@@ -3,217 +3,87 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Orbit · AI Task Scheduler</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=3">
+  <title>Orbit · Task overview</title>
+  <link rel="stylesheet" href="/static/styles.css?v=5">
 </head>
 <body>
-  <div class="grain"></div>
-  <aside>
-    <div class="brand">
-      <span class="brand-mark">O</span>
-      <div><b>ORBIT</b><small>AI TASK SCHEDULER</small></div>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar"><div class="topbar-inner">
+    <a class="brand" href="#overview" aria-label="Orbit overview"><span class="brand-mark" aria-hidden="true"></span>Orbit<span class="brand-description">Task scheduler</span></a>
+    <div class="connection" id="systemCard"><span class="status-dot" aria-hidden="true"></span><span id="systemLabel" role="status">Connecting…</span></div>
+    <a class="docs-link" href="/docs" target="_blank" rel="noopener">API docs ↗</a>
+  </div></header>
+  <main id="main" tabindex="-1">
+    <div class="page-heading">
+      <div><p class="eyebrow">ORBIT / OPERATIONS</p><h1 id="pageTitle">Inference overview</h1><p class="lede" id="pageDescription">Monitor performance, then drill into individual tasks.</p></div>
+      <div class="page-actions"><button id="demoBtn" class="button secondary">Run demo</button><button id="newTaskBtn" class="button primary" aria-expanded="false" aria-controls="composer"><span aria-hidden="true">+</span> New task</button></div>
     </div>
-    <nav>
-      <a class="active">⌁ <span>Control room</span></a>
-      <a href="#queue">≡ <span>Task queue</span></a>
-      <a href="#activity">⌁ <span>Activity</span></a>
-      <a href="#benchmarks">∑ <span>Benchmarks</span></a>
-      <a href="/docs" target="_blank">↗ <span>API docs</span></a>
+    <section id="composer" class="panel composer" aria-labelledby="composerTitle" hidden>
+      <div class="panel-head"><h2 id="composerTitle">New task</h2><button type="button" id="closeComposer" class="text-button">Close</button></div>
+      <form id="taskForm">
+        <label class="field-label" for="prompt">Prompt</label>
+        <textarea id="prompt" required minlength="3" maxlength="10000" placeholder="Describe the task you want to run…">Explain why database indexes speed up reads.</textarea>
+        <div class="form-row">
+          <label for="sla"><span class="field-label">Service level</span><select id="sla"><option value="standard">Standard · prefer lower cost</option><option value="urgent">Urgent · prefer shorter queue</option></select></label>
+          <label for="priority"><span class="field-label">Priority <output id="priorityValue" for="priority">5</output></span><input id="priority" type="range" min="1" max="10" value="5"><span class="field-help">1 lowest · 10 highest</span></label>
+        </div>
+        <div class="form-foot"><label class="check"><input id="failOnce" type="checkbox">Simulate first-attempt failure</label><div class="submit-actions"><span class="shortcut">Ctrl / ⌘ + Enter</span><button id="submitTask" class="button primary" type="submit">Dispatch task</button></div></div>
+        <p id="formFeedback" class="form-feedback" role="status" hidden></p>
+      </form>
+    </section>
+    <nav class="view-nav" aria-label="Dashboard views">
+      <a href="#overview" data-view="overview" aria-current="page">Overview</a>
+      <a href="#activity" data-view="activity">Activity</a>
+      <a href="#benchmarks" data-view="benchmarks">Benchmarks</a>
     </nav>
-    <div class="system-card" id="systemCard">
-      <div><span class="live-dot"></span><span id="systemLabel">CONNECTING</span></div>
-      <strong id="workerCount">—</strong>
-      <small>workers online</small>
-    </div>
-    <div class="version">VERSION <span>v1.0</span></div>
-  </aside>
-
-  <main>
-    <header>
-      <div>
-        <p class="eyebrow">CONTROL ROOM · LIVE</p>
-        <h1>Inference, intelligently routed.</h1>
-        <p class="lede">Dispatch AI workloads across model tiers using explainable routing, priority queues, and automatic recovery.</p>
+    <p id="connectionNotice" class="notice warning" role="status" hidden>Live updates are unavailable. Displayed data may be out of date. Reconnecting automatically…</p>
+    <section id="overview" class="view" aria-label="Task overview">
+      <div class="metrics" aria-label="Live workload summary">
+        <div><span class="metric-label">Active tasks</span><strong id="mActive">—</strong><span class="metric-detail" id="mQueueDetail">Waiting for data</span></div>
+        <div><span class="metric-label">Completed</span><strong id="mCompleted">—</strong><span class="metric-detail" id="mSuccess">No completed tasks yet</span></div>
+        <div><span class="metric-label">Failed</span><strong id="mFailed">—</strong><span class="metric-detail" id="mRecovery">0 retries · 0 recoveries</span></div>
+        <div><span class="metric-label">Workers online</span><strong id="workerCount">—</strong><span class="metric-detail" id="workerDetail">Waiting for heartbeats</span></div>
       </div>
-      <button id="demoBtn" class="primary">▶ Run 90-sec demo</button>
-    </header>
-
-    <section class="metrics" id="metrics">
-      <article>
-        <label>TOTAL TASKS</label>
-        <strong id="mTotal">0</strong>
-        <small><i class="cyan"></i><span id="mActive">0 active now</span></small>
-      </article>
-      <article>
-        <label>SUCCESS RATE</label>
-        <strong id="mSuccess">100<span>%</span></strong>
-        <small><i class="green"></i>retry-safe execution</small>
-      </article>
-      <article>
-        <label>COST SAVED</label>
-        <strong id="mSaved">0<span>%</span></strong>
-        <small><i class="violet"></i>vs. all-large baseline</small>
-      </article>
-      <article>
-        <label>AVG LATENCY</label>
-        <strong id="mLatency">—</strong>
-        <small><i class="amber"></i>end-to-end</small>
-      </article>
-    </section>
-
-    <section class="grid-top">
-      <article class="panel submit-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">NEW WORKLOAD</p>
-            <h2>Dispatch a task</h2>
-          </div>
-          <span class="shortcut">⌘ ENTER</span>
+      <section class="performance-section" aria-labelledby="performanceTitle">
+        <div class="section-toolbar">
+          <div><h2 id="performanceTitle">Performance</h2><p class="section-description">Live workload trends</p></div>
+          <div class="trend-controls"><span id="trendUpdated" class="quiet-label">Loading measurements…</span><label class="range-control"><span class="sr-only">Performance time range</span><select id="trendRange"><option value="5">Last 5 minutes</option><option value="15" selected>Last 15 minutes</option><option value="60">Last 60 minutes</option></select></label></div>
         </div>
-        <form id="taskForm">
-          <label class="field-label">PROMPT</label>
-          <textarea id="prompt" required minlength="3" placeholder="Describe the AI task you want to run…">Explain why database indexes speed up reads.</textarea>
-          <div class="form-row">
-            <label>
-              <span class="field-label">SERVICE LEVEL</span>
-              <select id="sla">
-                <option value="standard">Standard · cost optimized</option>
-                <option value="urgent">Urgent · latency optimized</option>
-              </select>
-            </label>
-            <label>
-              <span class="field-label">PRIORITY <b id="priorityValue">5</b></span>
-              <input id="priority" type="range" min="1" max="10" value="5">
-            </label>
-          </div>
-          <div class="form-foot">
-            <label class="check"><input id="failOnce" type="checkbox"><span></span>Simulate first-attempt failure</label>
-            <button class="primary" type="submit">Dispatch task <span>→</span></button>
-          </div>
-        </form>
-        <div id="decision" class="decision hidden"></div>
-      </article>
-
-      <article class="panel workers">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">EXECUTION LAYER</p>
-            <h2>Worker fleet</h2>
-          </div>
-          <span class="pulse">LIVE</span>
+        <p id="trendNotice" class="notice warning" role="status" hidden>Trend data is unavailable. Reconnecting automatically…</p>
+        <div class="trend-grid" id="trendGrid">
+          <article class="panel chart-panel"><div class="chart-heading"><h3>Completion rate</h3><span class="chart-unit">tasks / min</span></div><div class="chart-value"><strong id="rateValue">—</strong><span>window average</span></div><div id="rateChart" class="chart"><p class="chart-empty">Loading measurements…</p></div><div class="chart-legend"><span><i class="rate-key"></i>Succeeded</span><span id="rateNote">—</span></div><p class="chart-readout" id="rateReadout">Hover over the chart to inspect an interval.</p></article>
+          <article class="panel chart-panel"><div class="chart-heading"><h3>Queue pressure</h3><span class="chart-unit">tasks</span></div><div class="chart-value"><strong id="queueValue">—</strong><span>peak queued</span></div><div id="queueChart" class="chart"><p class="chart-empty">Loading measurements…</p></div><div class="chart-legend"><span><i class="queue-key"></i>Queued</span><span><i class="rate-key"></i>Running</span></div><p class="chart-readout" id="queueReadout">Peak tasks in each interval.</p></article>
+          <article class="panel chart-panel"><div class="chart-heading"><h3>End-to-end latency</h3><span class="chart-unit">succeeded tasks</span></div><div class="chart-value"><strong id="latencyValue">—</strong><span>window p95</span></div><div id="latencyChart" class="chart"><p class="chart-empty">Loading measurements…</p></div><div class="chart-legend"><span><i class="p50-key"></i>p50</span><span><i class="p95-key"></i>p95</span></div><p class="chart-readout" id="latencyReadout">No completion means no latency sample.</p></article>
         </div>
-        <div id="workers"></div>
-        <div class="routing-legend">
-          <div>
-            <span class="model-dot small"></span>
-            <p><b>Small tier</b><small>$0.003 / request · fast</small></p>
-          </div>
-          <div>
-            <span class="model-dot large"></span>
-            <p><b>Large tier</b><small>$0.018 / request · deep</small></p>
-          </div>
+        <details class="trend-data"><summary>View interval data <span id="intervalNote"></span></summary><div class="table-wrap"><table><caption class="sr-only">Performance measurements for the selected time range</caption><thead><tr><th>Interval ending</th><th>Completed</th><th>Tasks / min</th><th>Peak queued</th><th>Peak running</th><th>Latency p50</th><th>Latency p95</th></tr></thead><tbody id="trendRows"></tbody></table></div></details>
+      </section>
+      <section class="panel queue-panel" aria-labelledby="queueTitle">
+        <div class="panel-head"><div class="heading-inline"><h2 id="queueTitle">Task queue</h2><span class="count-label" id="taskCount">0 tasks</span></div><label class="search-label"><span class="sr-only">Search tasks</span><input type="search" id="taskSearch" placeholder="Search prompt or task ID…"></label></div>
+        <div class="filters" role="group" aria-label="Filter tasks by status">
+          <button class="filter active" data-status="all" aria-pressed="true">All</button><button class="filter" data-status="queued" aria-pressed="false">Queued</button><button class="filter" data-status="running" aria-pressed="false">Running</button><button class="filter" data-status="succeeded" aria-pressed="false">Succeeded</button><button class="filter" data-status="failed" aria-pressed="false">Failed</button>
         </div>
-      </article>
-    </section>
-
-    <section class="panel queue-panel" id="queue">
-      <div class="panel-head">
-        <div>
-          <p class="eyebrow">REAL-TIME PIPELINE</p>
-          <h2>Task queue</h2>
-        </div>
-        <div class="filters">
-          <button class="filter active" data-status="all">All</button>
-          <button class="filter" data-status="running">Running</button>
-          <button class="filter" data-status="succeeded">Succeeded</button>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>TASK</th><th>ROUTE</th><th>SLA</th><th>STATUS</th><th>ATTEMPT</th><th>LATENCY</th></tr>
-          </thead>
-          <tbody id="taskRows">
-            <tr><td colspan="6" class="empty">No tasks yet. Dispatch one or run the demo.</td></tr>
-          </tbody>
-        </table>
+        <div class="table-wrap"><table class="task-table"><caption class="sr-only">Recent tasks. Expand a task to view its routing decision and result.</caption><thead><tr><th scope="col">Task</th><th scope="col">Model tier</th><th scope="col">Status</th><th scope="col">Attempts</th><th scope="col">Total time</th><th scope="col"><span class="sr-only">Details</span></th></tr></thead><tbody id="taskRows"><tr><td colspan="6" class="empty">Loading tasks…</td></tr></tbody></table></div>
+        <div class="table-footer"><span id="queueNote">Most recent 100 tasks</span><span>Updates every 2 seconds</span></div>
+      </section>
+      <div class="support-grid">
+        <section class="panel" aria-labelledby="workersTitle"><div class="panel-head"><h2 id="workersTitle">Workers</h2><span class="quiet-label">Heartbeat status</span></div><div id="workers"><p class="empty">Loading workers…</p></div></section>
+        <section class="panel routing-summary" aria-labelledby="routingTitle"><div class="panel-head"><h2 id="routingTitle">Routing summary</h2><span class="quiet-label">Mock inference</span></div><div class="routing-bar" role="img" aria-label="No routed tasks" id="routingBar"><span id="smallBar"></span><span id="largeBar"></span></div><div class="routing-labels"><span><i class="small-key" aria-hidden="true"></i>Small <b id="smallCount">0</b></span><span><i class="large-key" aria-hidden="true"></i>Large <b id="largeCount">0</b></span></div><dl class="summary-list"><div><dt>Average total time</dt><dd id="mLatency">—</dd></div><div><dt>Estimated cost saving</dt><dd id="mSaved">—</dd></div></dl><p class="footnote">Cost uses fixed per-request estimates against an all-large baseline.</p></section>
       </div>
     </section>
-
-    <section class="bottom-grid">
-      <article class="panel distribution">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">ROUTING MIX</p>
-            <h2>Model distribution</h2>
-          </div>
-          <b id="routeRatio">0 / 0</b>
-        </div>
-        <div class="bar"><span id="smallBar"></span><i id="largeBar"></i></div>
-        <div class="bar-labels">
-          <span><i class="cyan"></i>Small <b id="smallCount">0</b></span>
-          <span><i class="violet"></i>Large <b id="largeCount">0</b></span>
-        </div>
-        <p class="policy">Policy combines prompt complexity, SLA, and live queue depth. Every decision includes a human-readable reason.</p>
-      </article>
-
-      <article class="panel activity" id="activity">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">SYSTEM LOG</p>
-            <h2>Live activity</h2>
-          </div>
-          <span class="pulse">STREAMING</span>
-        </div>
-        <div id="events"><p class="empty">Waiting for activity…</p></div>
-      </article>
+    <section id="activity" class="view" aria-label="Recent activity" hidden>
+      <div class="panel"><div class="panel-head"><div><h2>Recent events</h2><p class="section-description">The latest 30 routing, execution and recovery events.</p></div><label><span class="sr-only">Filter activity</span><select id="eventFilter"><option value="all">All events</option><option value="issues">Retries & failures</option><option value="recovered">Recoveries</option></select></label></div><div id="events"><p class="empty">Loading activity…</p></div></div>
     </section>
-
-    <section class="bench-grid" id="benchmarks">
-      <article class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">SAVED BENCHMARK</p>
-            <h2>Queue performance</h2>
-          </div>
-          <span class="shortcut" id="perfDatabase">—</span>
-        </div>
-        <div class="bench-stats">
-          <div><label>THROUGHPUT</label><strong id="perfThroughput">—</strong></div>
-          <div><label>COMPLETED</label><strong id="perfCompleted">—</strong></div>
-          <div><label>QUEUE P50</label><strong id="perfP50">—</strong></div>
-          <div><label>QUEUE P99</label><strong id="perfP99">—</strong></div>
-        </div>
-        <p class="policy" id="perfMeta">Loading saved report…</p>
-      </article>
-
-      <article class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">ROUTING EVALUATION</p>
-            <h2>Cost vs. quality</h2>
-          </div>
-          <span class="shortcut" id="routingProvider">—</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>THRESHOLD</th><th>QUALITY RETAINED</th><th>COST SAVED</th><th>SMALL / LARGE</th></tr>
-            </thead>
-            <tbody id="routingRows">
-              <tr><td colspan="4" class="empty">Loading saved report…</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="policy" id="routingMeta"></p>
-      </article>
+    <section id="benchmarks" class="view" aria-label="Saved benchmarks" hidden>
+      <p class="notice">Saved reports from controlled workloads. These results are separate from the live queue.</p>
+      <article class="panel benchmark-panel"><div class="panel-head"><div><h2>Queue performance</h2><p class="section-description">Scheduler throughput and queue latency</p></div><span class="neutral-tag" id="perfDatabase">Loading…</span></div><div class="bench-stats"><div><span class="metric-label">Throughput</span><strong id="perfThroughput">—</strong></div><div><span class="metric-label">Completed</span><strong id="perfCompleted">—</strong></div><div><span class="metric-label">Queue p50</span><strong id="perfP50">—</strong></div><div><span class="metric-label">Queue p99</span><strong id="perfP99">—</strong></div></div><p class="footnote" id="perfMeta">Loading saved report…</p></article>
+      <article class="panel benchmark-panel"><div class="panel-head"><div><h2>Routing evaluation</h2><p class="section-description">Estimated cost and quality across routing thresholds</p></div><span class="neutral-tag" id="routingProvider">Loading…</span></div><div class="table-wrap"><table><thead><tr><th scope="col">Threshold</th><th scope="col">Quality retained</th><th scope="col">Estimated saving</th><th scope="col">Small / large</th></tr></thead><tbody id="routingRows"><tr><td colspan="4" class="empty">Loading saved report…</td></tr></tbody></table></div><p class="footnote" id="routingMeta"></p></article>
+      <p class="footnote benchmark-note">Recovery time has not been benchmarked yet.</p>
     </section>
+    <footer class="page-footer"><span>Orbit <span aria-hidden="true">/</span> Development workspace</span><span id="lastUpdated">Waiting for live data</span></footer>
   </main>
-
-  <div id="toast" class="toast"></div>
-  <script src="/static/app.js?v=3"></script>
+  <dialog id="demoDialog" aria-labelledby="demoTitle" aria-describedby="demoDescription"><form method="dialog"><h2 id="demoTitle">Start a fresh demo?</h2><p id="demoDescription">This replaces the current tasks and activity with five sample tasks, including a simulated failure. Workers will process them when available.</p><div class="dialog-actions"><button class="button secondary" value="cancel" autofocus>Cancel</button><button class="button primary" value="confirm">Replace with demo tasks</button></div></form></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/static/charts.js?v=1"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>

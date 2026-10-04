@@ -44,7 +44,7 @@ $env:MODEL_TIER="small"; $env:WORKER_ID="worker-small-01"; python -m worker.main
 $env:MODEL_TIER="large"; $env:WORKER_ID="worker-large-01"; python -m worker.main
 ```
 
-Open **http://localhost:8000** and click **Run 90-sec demo**. API documentation is at `/docs`.
+Open **http://localhost:8000** and click **Run demo** (confirm replacing the current tasks), or use **New task** to submit a workload. API documentation is at `/docs`.
 
 ### Docker + PostgreSQL
 
@@ -56,11 +56,11 @@ Compose waits for PostgreSQL health, then starts the API, two tier-affine worker
 
 ## Demo script
 
-1. Click **Run 90-sec demo** to dispatch simple, urgent, complex, and failure-injected work.
-2. Point out the `SMALL` / `LARGE` route and readable reason under every task.
-3. Watch the small and large workers process tasks concurrently.
-4. Find the simulated `HTTP 503` task in Activity: it is requeued and succeeds on attempt 2.
-5. Close on success rate, average latency, model distribution, and estimated saving vs. all-large.
+1. Click **Run demo** and confirm replacing the current tasks and activity with the sample workload.
+2. In **Overview**, check current status, then inspect completion rate, queue pressure, and p50/p95 end-to-end latency over the last 5, 15, or 60 minutes. Expand a task with **+** to inspect its routing reason, attempts, and result.
+3. Search by prompt or task ID, or filter the queue by status to focus on active or failed work.
+4. Switch to **Activity** and select **Retries & failures** to find the simulated failure; its task succeeds on attempt 2.
+5. Review model distribution and estimated savings in the routing summary, then open **Benchmarks** for saved queue and fixture-evaluation reports. Recovery timing is not yet benchmarked.
 
 ## API
 
@@ -71,6 +71,7 @@ curl -X POST http://localhost:8000/tasks \
 
 curl http://localhost:8000/tasks/{task_id}
 curl http://localhost:8000/metrics/summary
+curl "http://localhost:8000/metrics/timeseries?minutes=15"
 curl http://localhost:8000/benchmarks/performance
 curl http://localhost:8000/benchmarks/routing
 ```
@@ -79,11 +80,13 @@ curl http://localhost:8000/benchmarks/routing
 
 `GET /benchmarks/{performance|routing}` serves the saved reports from `bench/results/` without touching the queue; the dashboard's Benchmarks section renders both.
 
+`GET /metrics/timeseries?minutes=15` reconstructs 30 intervals from persisted task events and completion timestamps. The dashboard refreshes these trends every five seconds. Queue pressure shows each interval's peak queued and running counts; completion rate counts successful tasks per minute. Latency measures creation to successful completion, including retry and recovery waits. Intervals without completions have no latency sample. These live trends are separate from the saved benchmark reports.
+
 ## Failure semantics
 
 - **Provider failure:** a retryable failure returns the task to `queued` until `max_attempts` is reached.
-- **Duplicate submission:** the unique idempotency key returns the existing logical task.
-- **Late write-back:** completion and lease renewal require the same worker ID, attempt, and `running` state, so a stale owner cannot overwrite a newer result.
+- **Duplicate submission:** the unique idempotency key returns the existing logical task, including concurrent submissions through independent API processes. The winning request returns HTTP 201; duplicates return HTTP 200 without extra routing events.
+- **Late write-back:** completion, failure/retry, and lease renewal atomically require the same worker ID, attempt, and `running` state in the database update. Recovery invalidates the old owner; a reused worker ID still cannot write for an earlier attempt. State changes and their events commit together.
 - **Worker crash:** claims receive a 15-second lease that is renewed every 3 seconds. The monitor checks every 2 seconds and requeues expired work for a new attempt.
 
 ## Routing policy
@@ -104,7 +107,7 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Tests cover routing, idempotency, retry, priority claims, lease renewal, stale-task recovery, fencing-token rejection, benchmark statistics, saved benchmark reports, all four graders, and the reference cost-quality result.
+Tests cover routing, concurrent idempotent submissions, retry, priority claims, lease renewal, stale-task recovery, competing completion/failure writes, recovery during stale write-back, benchmark statistics, saved benchmark reports, all four graders, and the reference cost-quality result. Concurrency regressions use independent database connections and synchronized interleavings, with PostgreSQL coverage enabled by `TEST_DATABASE_URL`.
 Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
 
 ## Performance benchmark

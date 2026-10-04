@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.store import SchedulerStore
 from app.benchmarks import load_result
+from app.telemetry import timeseries
 
 store = SchedulerStore()
 
@@ -62,6 +63,10 @@ def metrics():
 @app.get("/workers")
 def worker_status():
     return store.list_workers()
+
+@app.get("/metrics/timeseries")
+def metric_timeseries(minutes: int = Query(default=15, ge=1, le=60)):
+    return timeseries(store, minutes)
 
 @app.get("/events")
 def event_feed():
