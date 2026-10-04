@@ -1,4 +1,6 @@
-from app.store import SchedulerStore
+from datetime import datetime, timezone
+
+from app.store import SchedulerStore, Task
 from worker.main import WorkerService
 
 
@@ -25,6 +27,8 @@ def test_worker_retries_transient_failure():
     worker = WorkerService(store, "worker-small-test", "small")
     assert worker.run_once(delay=False) is True
     assert store.get_task(task["id"])["status"] == "queued"
+    with store.Session.begin() as session:
+        session.get(Task, task["id"]).next_attempt_at = datetime.now(timezone.utc)
     assert worker.run_once(delay=False) is True
     assert store.get_task(task["id"])["status"] == "succeeded"
     assert store.get_task(task["id"])["attempt"] == 2

@@ -37,6 +37,8 @@ services:
       MODEL_TIER: small
       LEASE_SECONDS: "15"
       LEASE_RENEW_INTERVAL: "3"
+      RETRY_BASE_SECONDS: "1"
+      RETRY_MAX_SECONDS: "30"
       PYTHONUNBUFFERED: "1"
     depends_on:
       app:
@@ -51,6 +53,8 @@ services:
       MODEL_TIER: large
       LEASE_SECONDS: "15"
       LEASE_RENEW_INTERVAL: "3"
+      RETRY_BASE_SECONDS: "1"
+      RETRY_MAX_SECONDS: "30"
       PYTHONUNBUFFERED: "1"
     depends_on:
       app:

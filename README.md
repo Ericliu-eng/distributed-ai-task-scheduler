@@ -2,7 +2,7 @@
 
 Orbit is a demo-ready multi-worker inference scheduler that routes each request to a small or large model tier using prompt difficulty, SLA, and live queue pressure. Every decision is explainable, workers execute concurrently, failed calls retry automatically, and the dashboard quantifies latency, reliability, routing mix, and estimated savings.
 
-Reference queue benchmark: **1,000/1,000 tasks completed**, **129.7 tasks/s**, and **10,392 ms p99 queue latency** with eight workers on a local PostgreSQL 16 burst workload. See the methodology and limitations below before comparing these numbers.
+Reference results on local PostgreSQL 16: **1,000/1,000 tasks completed at 129.7 tasks/s**, plus **20/20 crashed tasks recovered with 197.12 ms p95 crash-to-completion time** under the benchmark's short lease configuration. See the methodology and limitations below before comparing these numbers.
 
 ## Why this design
 
@@ -60,7 +60,7 @@ Compose waits for PostgreSQL health, then starts the API, two tier-affine worker
 2. In **Overview**, check current status, then inspect completion rate, queue pressure, and p50/p95 end-to-end latency over the last 5, 15, or 60 minutes. Expand a task with **+** to inspect its routing reason, attempts, and result.
 3. Search by prompt or task ID, or filter the queue by status to focus on active or failed work.
 4. Switch to **Activity** and select **Retries & failures** to find the simulated failure; its task succeeds on attempt 2.
-5. Review model distribution and estimated savings in the routing summary, then open **Benchmarks** for saved queue and fixture-evaluation reports. Recovery timing is not yet benchmarked.
+5. Review model distribution and estimated savings in the routing summary, then open **Benchmarks** for saved queue, crash-recovery, and fixture-evaluation reports.
 
 ## API
 
@@ -73,6 +73,7 @@ curl http://localhost:8000/tasks/{task_id}
 curl http://localhost:8000/metrics/summary
 curl "http://localhost:8000/metrics/timeseries?minutes=15"
 curl http://localhost:8000/benchmarks/performance
+curl http://localhost:8000/benchmarks/recovery
 curl http://localhost:8000/benchmarks/routing
 ```
 
@@ -84,7 +85,7 @@ curl http://localhost:8000/benchmarks/routing
 
 ## Failure semantics
 
-- **Provider failure:** a retryable failure returns the task to `queued` until `max_attempts` is reached.
+- **Provider failure:** a retryable failure returns the task to `queued` with a persisted `next_attempt_at`. The default delay grows exponentially from 1 to 30 seconds with deterministic 50–100% per-task jitter, configured through `RETRY_BASE_SECONDS` and `RETRY_MAX_SECONDS`.
 - **Duplicate submission:** the unique idempotency key returns the existing logical task, including concurrent submissions through independent API processes. The winning request returns HTTP 201; duplicates return HTTP 200 without extra routing events.
 - **Late write-back:** completion, failure/retry, and lease renewal atomically require the same worker ID, attempt, and `running` state in the database update. Recovery invalidates the old owner; a reused worker ID still cannot write for an earlier attempt. State changes and their events commit together.
 - **Worker crash:** claims receive a 15-second lease that is renewed every 3 seconds. The monitor checks every 2 seconds and requeues expired work for a new attempt.
@@ -107,7 +108,7 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Tests cover routing, concurrent idempotent submissions, retry, priority claims, lease renewal, stale-task recovery, competing completion/failure writes, recovery during stale write-back, benchmark statistics, saved benchmark reports, all four graders, and the reference cost-quality result. Concurrency regressions use independent database connections and synchronized interleavings, with PostgreSQL coverage enabled by `TEST_DATABASE_URL`.
+Tests cover routing, concurrent idempotent submissions, jittered retry backoff and eligibility, priority claims, lease renewal, stale-task recovery, competing completion/failure writes, recovery during stale write-back, benchmark statistics, saved benchmark reports, all four graders, and the reference cost-quality result. Concurrency regressions use independent database connections and synchronized interleavings, with PostgreSQL coverage enabled by `TEST_DATABASE_URL`.
 Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
 
 ## Performance benchmark
@@ -142,6 +143,35 @@ The safety flag is required because the benchmark clears task and event rows bef
 
 This is a single local Windows 11 / Python 3.13.12 / PostgreSQL 16 run using mock inference with provider delay disabled. Tasks are submitted as a burst and pinned to a 50/50 tier distribution so all eight workers participate; queue latency starts at each task's creation time and therefore includes time spent waiting behind the burst. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](bench/results/postgres-1000-tasks.json); rerun the benchmark on the target hardware before using the number in a resume.
 
+## Crash-recovery benchmark
+
+Run repeated worker-crash trials against a disposable SQLite database:
+
+```bash
+python -m bench.recovery --tasks 20 --lease-seconds 0.2 --poll-interval 0.02
+```
+
+For PostgreSQL, use a dedicated database and the same explicit reset guard as the queue benchmark:
+
+```bash
+BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_recovery \
+  python -m bench.recovery --tasks 20 --lease-seconds 0.2 --poll-interval 0.02 \
+  --allow-reset --output recovery-results.json
+```
+
+Each trial starts a worker subprocess that claims a task and exits without writing a result. The benchmark waits for lease recovery, lets a replacement claim attempt 2 and finish, then verifies that the crashed attempt is fenced. It reports p50/p95/p99 for crash-to-detection, lease-expiry-to-detection, detection-to-reclaim, reclaim-to-completion, and total crash-to-completion time.
+
+| Recovery workload | Result |
+| --- | ---: |
+| Tasks recovered and completed | 20 / 20 |
+| Stale writes rejected | 20 / 20 |
+| Lease / monitor poll | 200 ms / 20 ms |
+| Crash to completion p50 | 177.68 ms |
+| Crash to completion p95 | 197.12 ms |
+| Lease expiry to detection p95 | 48.42 ms |
+
+This is a single local Windows 11 / Python 3.11 / PostgreSQL 16 run. It measures scheduler and database recovery with mock inference delay disabled; it excludes provider latency, container restart time, network faults, and orchestrator scheduling. The deliberately short lease makes the benchmark fast and does not represent the 15-second production default. The machine-readable result is stored in [`bench/results/postgres-recovery-20.json`](bench/results/postgres-recovery-20.json).
+
 ## Routing cost-quality evaluation
 
 The repository includes a fixed 50-case dataset with arithmetic, structured extraction, classification, and executable code graders. Compare the all-large baseline with multiple routing thresholds:
@@ -163,6 +193,6 @@ This fixture adapter makes routing, grading, and cost accounting deterministic a
 
 ## Known limitations and next steps
 
-- The additive startup migration handles the two lease columns; a production deployment should adopt a full migration framework before more schema changes.
+- The additive startup migration handles lease, recovery-count, and retry-eligibility columns; a production deployment should adopt a full migration framework before more schema changes.
 - PostgreSQL is used for transactional state management, not claimed as universally superior to dedicated brokers.
 - Replace deterministic fixture responses with real provider adapters before treating the routing evaluation as evidence of model quality.

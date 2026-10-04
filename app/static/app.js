@@ -116,6 +116,7 @@ function details(task) {
     item('Service level / priority', titleCase(task.sla) + ' / ' + task.priority) +
     item('Worker', task.worker_id || 'Not assigned') +
     item('Attempts / recoveries', task.attempt + ' of ' + task.max_attempts + ' / ' + task.recovery_count) +
+    (task.next_attempt_at ? item('Retry eligible', eventDate(task.next_attempt_at).toLocaleString()) : '') +
     item('Time to latest start / execution', duration(task.queue_ms) + ' / ' + duration(task.run_ms)) +
     (task.error ? item('Last error', task.error, 'full-width') : '') +
     item('Result', task.result || 'No result yet.', 'full-width detail-result') +
@@ -184,6 +185,21 @@ function renderPerformance(report) {
   $('#perfP50').textContent = duration(report.queue_latency_ms.p50);
   $('#perfP99').textContent = duration(report.queue_latency_ms.p99);
   $('#perfMeta').textContent = report.workers + ' workers · ' + report.workload + ' · ' + report.execution_mode + '. Queue latency includes time waiting behind the burst. Measured ' + new Date(report.measured_at).toLocaleDateString() + ' on ' + report.platform + '.';
+}
+
+function renderRecovery(report) {
+  const total = report.trials;
+  const completed = report.tasks_succeeded;
+  const crashToComplete = report.timings_ms.crash_to_completion_ms;
+  $('#recoveryDatabase').textContent = report.database;
+  $('#recoveryCompleted').textContent = number(completed) + ' / ' + number(total);
+  $('#recoveryP50').textContent = duration(crashToComplete.p50);
+  $('#recoveryP95').textContent = duration(crashToComplete.p95);
+  $('#recoveryFenced').textContent = number(report.stale_writes_rejected) + ' / ' + number(total);
+  $('#recoveryMeta').textContent = 'Lease ' + number(report.lease_seconds, 3) + ' s · monitor poll ' +
+    number(report.recovery_poll_interval_seconds, 3) + ' s · p95 expiry-to-detection ' +
+    duration(report.timings_ms.lease_expiry_to_detection_ms.p95) + '. ' + report.limitations[0] +
+    ' Measured ' + new Date(report.measured_at).toLocaleDateString() + ' on ' + report.platform + '.';
 }
 
 let trendRequest = 0;
@@ -357,6 +373,10 @@ poll();
 loadReport('performance', renderPerformance, () => {
   $('#perfDatabase').textContent = 'Unavailable';
   $('#perfMeta').textContent = 'Saved performance report unavailable. Reload to try again.';
+});
+loadReport('recovery', renderRecovery, () => {
+  $('#recoveryDatabase').textContent = 'Unavailable';
+  $('#recoveryMeta').textContent = 'Saved recovery report unavailable. Reload to try again.';
 });
 loadReport('routing', renderRouting, () => {
   $('#routingProvider').textContent = 'Unavailable';

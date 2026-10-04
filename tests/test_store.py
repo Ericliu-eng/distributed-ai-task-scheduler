@@ -1,4 +1,6 @@
-from app.store import SchedulerStore
+from datetime import datetime, timezone
+
+from app.store import SchedulerStore, Task
 
 def make_store():
     store = SchedulerStore("sqlite:///:memory:")
@@ -28,6 +30,9 @@ def test_retry_then_success():
     task, _ = store.create_task("retry this task", fail_once=True)
     claim1 = store.claim("worker-small-01", "small")
     assert store.fail_or_retry(task["id"], "worker-small-01", claim1["attempt"], "503") == "queued"
+    assert store.claim("worker-small-01", "small") is None
+    with store.Session.begin() as session:
+        session.get(Task, task["id"]).next_attempt_at = datetime.now(timezone.utc)
     claim2 = store.claim("worker-small-01", "small")
     assert claim2["attempt"] == 2
     assert store.finish(task["id"], "worker-small-01", 2, "ok") is True

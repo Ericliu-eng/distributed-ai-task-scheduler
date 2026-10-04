@@ -10,6 +10,7 @@ RESULTS_DIR = Path(__file__).resolve().parents[1] / "bench" / "results"
 RESULT_FILES = {
     "performance": "postgres-1000-tasks.json",
     "routing": "routing-evaluation.json",
+    "recovery": "postgres-recovery-20.json",
 }
 
 
