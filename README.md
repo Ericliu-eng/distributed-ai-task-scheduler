@@ -4,9 +4,9 @@ Orbit is a demo-ready multi-worker inference scheduler that routes each request 
 
 Reference results on local PostgreSQL 16: **1,000/1,000 tasks completed at 135.4 tasks/s with zero duplicate claims** (median of three runs), plus **20/20 crashed tasks recovered with 197.12 ms p95 crash-to-completion time** under the benchmark's short lease configuration. On a 50-case graded evaluation with Claude Haiku 4.5 and Sonnet 5.5, routing at the default threshold kept **100% of all-Sonnet quality at 35% lower measured cost**. See the methodology and limitations below before comparing these numbers.
 
-![Animated flow: a task is routed to the large tier, claimed by exactly one worker through SKIP LOCKED, recovered after that worker is killed, and completed by a second worker while the first worker's late write is rejected](docs/demo/orbit-flow.gif)
+![Animated flow: a short task is routed to the small tier, fails once and retries after backoff; a long task is routed to the large tier, claimed by exactly one worker, recovered after that worker is killed, and completed by a second worker while the late write is rejected; the dashboard event feed and saved benchmark results update alongside](docs/demo/orbit-flow.gif)
 
-One task's path through a worker crash: lease expiry returns it to the queue, and the attempt number fences the dead worker's late write. This is an illustrated flow, not a recording; it is rendered by [`docs/demo/render_flow.py`](docs/demo/render_flow.py), and a [static final frame](docs/demo/orbit-flow.png) is available.
+Two tasks cover every path: the routing rules in order, a provider failure with exponential backoff, a SKIP LOCKED claim, a killed worker recovered by lease expiry, and a fenced stale write, with the dashboard's event feed and the saved benchmark results alongside. This is an illustrated flow, not a recording; it is rendered by [`docs/demo/render_flow.py`](docs/demo/render_flow.py), and a [static final frame](docs/demo/orbit-flow.png) is available.
 
 ## Why this design
 
