@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import platform
+import sys
 import tempfile
 import time
 import uuid
@@ -177,6 +178,8 @@ def main() -> None:
     if args.database_url:
         result = run_benchmark(args.database_url, args.tasks, args.workers)
     else:
+        print("BENCHMARK_DATABASE_URL is not set; using a temporary SQLite database.",
+              file=sys.stderr)
         with tempfile.TemporaryDirectory(prefix="scheduler-benchmark-") as directory:
             database_url = f"sqlite:///{Path(directory, 'benchmark.db').as_posix()}"
             result = run_benchmark(database_url, args.tasks, args.workers)
