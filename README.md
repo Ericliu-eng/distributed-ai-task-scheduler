@@ -59,8 +59,15 @@ pytest -q
 
 CI also runs the PostgreSQL concurrency suite, including eight workers draining 100 tasks with exactly one owner per task.
 
-## Docs
+## Documentation
 
-- [Design](docs/DESIGN.md): routing policy, failure semantics, API, dashboard walkthrough, limitations
-- [Benchmarks](docs/BENCHMARKS.md): throughput and crash-recovery methodology and raw results
-- [Routing evaluation](docs/EVALUATION.md): dataset, graders, Claude results, and their limits
+| Topic | Document |
+| --- | --- |
+| Architecture and routing policy | [docs/DESIGN.md](docs/DESIGN.md#why-this-design) |
+| Failure semantics | [docs/DESIGN.md#failure-semantics](docs/DESIGN.md#failure-semantics) |
+| API and dashboard | [docs/DESIGN.md#api](docs/DESIGN.md#api), [dashboard walkthrough](docs/DESIGN.md#dashboard-walkthrough) |
+| Queue throughput and crash recovery | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) |
+| Routing cost-quality evaluation | [docs/EVALUATION.md](docs/EVALUATION.md) |
+| Tests and CI | [docs/DESIGN.md#tests](docs/DESIGN.md#tests) |
+| Limitations and next steps | [docs/DESIGN.md#known-limitations-and-next-steps](docs/DESIGN.md#known-limitations-and-next-steps) |
+| Animation source | [docs/demo/render_flow.py](docs/demo/render_flow.py) |
