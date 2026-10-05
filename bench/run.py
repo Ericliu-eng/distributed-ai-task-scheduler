@@ -8,13 +8,15 @@ import logging
 import os
 from pathlib import Path
 import platform
+import sys
 import tempfile
 import time
 import uuid
 
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 
-from app.store import SchedulerStore, Task
+from app.router import TIER_COST
+from app.store import Event, SchedulerStore, Task
 from worker.main import WorkerService
 
 
@@ -73,7 +75,7 @@ def run_benchmark(database_url: str, task_count: int = 200,
                     update(Task).where(Task.id.in_(task_ids[offset:offset + 500])).values(
                         route_tier=tier,
                         route_reason="Benchmark workload: forced balanced tier distribution",
-                        estimated_cost=0.003 if tier == "small" else 0.018,
+                        estimated_cost=TIER_COST[tier],
                     )
                 )
 
@@ -106,6 +108,13 @@ def run_benchmark(database_url: str, task_count: int = 200,
     duration_seconds = time.perf_counter() - started
 
     tasks = setup_store.list_tasks(limit=task_count + 10)
+    # Every claim writes an event in the same transaction, so a task claimed more
+    # than once (or retried) would show more than one claim event.
+    with setup_store.Session() as session:
+        claims_per_task = session.execute(
+            select(func.count()).where(Event.kind == "claimed").group_by(Event.task_id)
+        ).scalars().all()
+    duplicate_claims = sum(count - 1 for count in claims_per_task if count > 1)
     succeeded = [task for task in tasks if task["status"] == "succeeded"]
     queue_latencies = [float(task["queue_ms"]) for task in succeeded]
     total_latencies = [
@@ -121,6 +130,9 @@ def run_benchmark(database_url: str, task_count: int = 200,
         "tasks_submitted": task_count,
         "tasks_succeeded": len(succeeded),
         "workers": worker_count,
+        "worker_mode": "threads in one process, each with its own database connection pool",
+        "duplicate_claims": duplicate_claims,
+        "tasks_with_single_attempt": sum(task["attempt"] == 1 for task in tasks),
         "execution_mode": "mock inference without provider delay",
         "workload": "burst submission with forced 50/50 tier distribution",
         "worker_completions": completed_by_workers,
@@ -166,6 +178,8 @@ def main() -> None:
     if args.database_url:
         result = run_benchmark(args.database_url, args.tasks, args.workers)
     else:
+        print("BENCHMARK_DATABASE_URL is not set; using a temporary SQLite database.",
+              file=sys.stderr)
         with tempfile.TemporaryDirectory(prefix="scheduler-benchmark-") as directory:
             database_url = f"sqlite:///{Path(directory, 'benchmark.db').as_posix()}"
             result = run_benchmark(database_url, args.tasks, args.workers)

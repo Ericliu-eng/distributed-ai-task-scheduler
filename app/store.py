@@ -4,13 +4,21 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, case, create_engine, func, inspect, or_, select, text, update
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, case, create_engine, func, inspect, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
-from app.router import route_task
+from app.router import TIER_COST, route_task
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+def as_utc(value: datetime) -> datetime:
+    """Normalize database timestamps to aware UTC.
+
+    SQLite returns naive values (stored as UTC); PostgreSQL returns aware values in
+    the connection's TimeZone, which is not necessarily UTC.
+    """
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 def retry_delay_seconds(task_id: str, attempt: int, base_seconds: float = 1.0,
                         max_seconds: float = 30.0) -> float:
@@ -53,6 +61,13 @@ class Task(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    __table_args__ = (
+        # Claim path: WHERE status/route_tier ORDER BY priority DESC, created_at.
+        Index("ix_tasks_claim", "status", "route_tier", "priority", "created_at"),
+        # Recovery scan: WHERE status = 'running' AND lease_until < now.
+        Index("ix_tasks_lease", "status", "lease_until"),
+    )
+
 class Event(Base):
     __tablename__ = "events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -71,11 +86,9 @@ class Worker(Base):
 
 def task_dict(task: Task) -> dict:
     def iso(value): return value.isoformat() if value else None
-    # SQLite drops timezone metadata while PostgreSQL preserves it. Normalize both
-    # sides for portable duration math; all stored timestamps are UTC.
     def elapsed_ms(later, earlier):
         if not later or not earlier: return None
-        return max(0, int((later.replace(tzinfo=None) - earlier.replace(tzinfo=None)).total_seconds() * 1000))
+        return max(0, int((as_utc(later) - as_utc(earlier)).total_seconds() * 1000))
     queue_ms = elapsed_ms(task.started_at, task.created_at)
     run_ms = elapsed_ms(task.finished_at, task.started_at)
     return {"id": task.id, "prompt": task.prompt, "sla": task.sla, "priority": task.priority,
@@ -107,6 +120,21 @@ class SchedulerStore:
     def init(self):
         Base.metadata.create_all(self.engine)
         self._migrate_task_columns()
+        self._ensure_task_indexes()
+
+    def _ensure_task_indexes(self) -> None:
+        """Add indexes that databases created by earlier versions are missing."""
+        existing = {column["name"] for column in inspect(self.engine).get_columns("tasks")}
+        for index in Task.__table__.indexes:
+            if not {column.name for column in index.columns} <= existing:
+                continue
+            try:
+                index.create(self.engine, checkfirst=True)
+            except (OperationalError, ProgrammingError, IntegrityError) as exc:
+                # Same startup race as the column migration: another process won.
+                message = str(exc).lower()
+                if "already exists" not in message and "duplicate key" not in message:
+                    raise
 
     def _migrate_task_columns(self) -> None:
         """Apply additive columns to databases created by earlier versions.
@@ -292,13 +320,13 @@ class SchedulerStore:
                 worker.last_heartbeat = utcnow()
 
     def list_workers(self, stale_after_seconds: float = 8.0) -> list[dict]:
-        now = utcnow().replace(tzinfo=None)
+        now = utcnow()
         with self.Session() as session:
             rows = session.scalars(select(Worker).order_by(Worker.id)).all()
             result = []
             for worker in rows:
-                heartbeat = worker.last_heartbeat
-                age = (now - heartbeat.replace(tzinfo=None)).total_seconds()
+                heartbeat = as_utc(worker.last_heartbeat)
+                age = (now - heartbeat).total_seconds()
                 status = "offline" if age > stale_after_seconds else worker.status
                 result.append({"id": worker.id, "tier": worker.model_tier, "status": status,
                                "task_id": worker.current_task_id if status != "offline" else None,
@@ -368,22 +396,38 @@ class SchedulerStore:
             rows = session.scalars(select(Event).order_by(Event.id.desc()).limit(limit)).all()
             return [{"id": e.id, "task_id": e.task_id, "kind": e.kind, "message": e.message, "created_at": e.created_at.isoformat()} for e in rows]
 
+    def _elapsed_ms_sql(self, later, earlier):
+        if self.engine.dialect.name == "postgresql":
+            return func.extract("epoch", later - earlier) * 1000
+        return (func.julianday(later) - func.julianday(earlier)) * 86_400_000
+
     def metrics(self) -> dict:
-        tasks = self.list_tasks(10000)
-        total, succeeded = len(tasks), sum(t["status"] == "succeeded" for t in tasks)
-        terminal = sum(t["status"] in ("succeeded", "failed") for t in tasks)
-        latencies = [t["queue_ms"] + t["run_ms"] for t in tasks if t["queue_ms"] is not None and t["run_ms"] is not None]
-        spent = sum(t["estimated_cost"] for t in tasks)
-        return {"total": total, "queued": sum(t["status"] == "queued" for t in tasks),
-                "running": sum(t["status"] == "running" for t in tasks), "succeeded": succeeded,
-                "failed": sum(t["status"] == "failed" for t in tasks),
+        """Aggregate in the database so the cost stays flat as the table grows."""
+        with self.Session() as session:
+            by_status = dict(session.execute(select(Task.status, func.count()).group_by(Task.status)).all())
+            by_tier = dict(session.execute(select(Task.route_tier, func.count()).group_by(Task.route_tier)).all())
+            spent, retries, recoveries = session.execute(select(
+                func.coalesce(func.sum(Task.estimated_cost), 0.0),
+                func.coalesce(func.sum(case((Task.attempt > 1, Task.attempt - 1), else_=0)), 0),
+                func.coalesce(func.sum(Task.recovery_count), 0),
+            )).one()
+            # Same definition as task_dict: creation to finish of a task that started.
+            avg_latency = session.scalar(select(func.avg(self._elapsed_ms_sql(Task.finished_at, Task.created_at))).where(
+                Task.started_at.is_not(None), Task.finished_at.is_not(None),
+            ))
+        total = sum(by_status.values())
+        succeeded, failed = by_status.get("succeeded", 0), by_status.get("failed", 0)
+        terminal = succeeded + failed
+        all_large_cost = total * TIER_COST["large"]
+        return {"total": total, "queued": by_status.get("queued", 0),
+                "running": by_status.get("running", 0), "succeeded": succeeded, "failed": failed,
                 "success_rate": round((succeeded / terminal * 100) if terminal else 100, 1),
-                "small": sum(t["route_tier"] == "small" for t in tasks), "large": sum(t["route_tier"] == "large" for t in tasks),
-                "retries": sum(max(0, t["attempt"] - 1) for t in tasks), "estimated_cost": round(spent, 3),
-                "recoveries": sum(t["recovery_count"] for t in tasks),
-                "all_large_cost": round(total * 0.018, 3),
-                "cost_saved_pct": round((1 - spent / (total * 0.018)) * 100, 1) if total else 0,
-                "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else 0}
+                "small": by_tier.get("small", 0), "large": by_tier.get("large", 0),
+                "retries": int(retries), "estimated_cost": round(float(spent), 3),
+                "recoveries": int(recoveries),
+                "all_large_cost": round(all_large_cost, 3),
+                "cost_saved_pct": round((1 - float(spent) / all_large_cost) * 100, 1) if total else 0,
+                "avg_latency_ms": max(0, round(float(avg_latency))) if avg_latency is not None else 0}
 
     def reset(self):
         with self.lock, self.Session.begin() as session:

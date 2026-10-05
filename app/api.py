@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -11,6 +12,14 @@ from app.benchmarks import load_result
 from app.telemetry import timeseries
 
 store = SchedulerStore()
+# Demo mode enables the destructive reset endpoint and the simulated-failure hook.
+# Set DEMO_MODE=false anywhere the API is reachable by people other than you.
+DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() not in {"0", "false", "no"}
+
+
+def require_demo_mode(feature: str) -> None:
+    if not DEMO_MODE:
+        raise HTTPException(403, f"{feature} is only available when DEMO_MODE is enabled")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -35,10 +44,13 @@ def dashboard():
 @app.get("/health")
 def health():
     worker_rows = store.list_workers()
-    return {"status": "ok", "workers": sum(w["status"] != "offline" for w in worker_rows)}
+    return {"status": "ok", "workers": sum(w["status"] != "offline" for w in worker_rows),
+            "demo_mode": DEMO_MODE}
 
 @app.post("/tasks", status_code=201)
 def create_task(payload: TaskCreate, response: Response):
+    if payload.fail_once:
+        require_demo_mode("Simulated failure")
     task, created = store.create_task(**payload.model_dump())
     if not created:
         response.status_code = 200
@@ -79,6 +91,7 @@ def benchmark_report(kind: str):
 
 @app.post("/demo/reset")
 def reset_demo():
+    require_demo_mode("Demo reset")
     store.reset()
     demo = [
         ("Explain why database indexes speed up reads.", "standard", 5, False),

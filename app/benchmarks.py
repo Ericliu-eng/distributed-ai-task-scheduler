@@ -9,7 +9,7 @@ from fastapi import HTTPException
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "bench" / "results"
 RESULT_FILES = {
     "performance": "postgres-1000-tasks.json",
-    "routing": "routing-evaluation.json",
+    "routing": "routing-evaluation-claude.json",
     "recovery": "postgres-recovery-20.json",
 }
 

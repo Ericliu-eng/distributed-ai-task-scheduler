@@ -16,6 +16,8 @@ def test_benchmark_completes_workload_and_reports_percentiles(tmp_path):
     assert result["tasks_succeeded"] == 24
     assert result["workers"] == 4
     assert sum(result["worker_completions"]) == 24
+    assert result["duplicate_claims"] == 0
+    assert result["tasks_with_single_attempt"] == 24
     assert result["throughput_tasks_per_second"] > 0
     assert result["queue_latency_ms"]["p50"] >= 0
     assert result["queue_latency_ms"]["p95"] >= result["queue_latency_ms"]["p50"]

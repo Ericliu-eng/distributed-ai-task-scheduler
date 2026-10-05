@@ -2,13 +2,13 @@ import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from app.store import Event, SchedulerStore, Task
+from app.store import Event, SchedulerStore, Task, as_utc
 
 
 POSTGRES_TEST_URL = os.getenv("TEST_DATABASE_URL")
@@ -65,8 +65,8 @@ def assert_committed_task(response, persisted):
     assert response["max_attempts"] == 3
     assert response["created_at"] is not None
     # SQLite drops timezone metadata on loading a committed timestamp.
-    response_time = datetime.fromisoformat(response["created_at"]).replace(tzinfo=timezone.utc)
-    persisted_time = datetime.fromisoformat(persisted["created_at"]).replace(tzinfo=timezone.utc)
+    response_time = as_utc(datetime.fromisoformat(response["created_at"]))
+    persisted_time = as_utc(datetime.fromisoformat(persisted["created_at"]))
     assert response_time == persisted_time
     assert {key: value for key, value in response.items() if key != "created_at"} == {
         key: value for key, value in persisted.items() if key != "created_at"

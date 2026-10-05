@@ -149,6 +149,8 @@ def main() -> None:
             args.database_url, args.tasks, args.lease_seconds, args.poll_interval
         )
     else:
+        print("BENCHMARK_DATABASE_URL is not set; using a temporary SQLite database.",
+              file=sys.stderr)
         with tempfile.TemporaryDirectory(prefix="scheduler-recovery-") as directory:
             result = run_recovery_benchmark(
                 f"sqlite:///{Path(directory, 'recovery.db').as_posix()}",

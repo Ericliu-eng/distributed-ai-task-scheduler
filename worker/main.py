@@ -12,6 +12,8 @@ from worker.executor import execute
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
                     format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("scheduler-worker")
+IDLE_HEARTBEAT_SECONDS = 2.0
+MAX_ERROR_BACKOFF_SECONDS = 10.0
 
 
 class WorkerService:
@@ -27,12 +29,20 @@ class WorkerService:
         self.lease_seconds = lease_seconds
         self.renew_interval = renew_interval
         self.stop_event = threading.Event()
+        self._last_idle_heartbeat: float | None = None
 
     def stop(self, *_):
         self.stop_event.set()
 
+    def _idle_heartbeat(self, force: bool = False) -> None:
+        # Polling every 250 ms should not mean writing the workers table every 250 ms.
+        now = time.monotonic()
+        if force or self._last_idle_heartbeat is None or now - self._last_idle_heartbeat >= IDLE_HEARTBEAT_SECONDS:
+            self.store.heartbeat(self.worker_id, self.tier, "idle")
+            self._last_idle_heartbeat = now
+
     def run_once(self, delay: bool = True) -> bool:
-        self.store.heartbeat(self.worker_id, self.tier, "idle")
+        self._idle_heartbeat()
         task = self.store.claim(self.worker_id, self.tier, self.lease_seconds)
         if task is None:
             return False
@@ -62,7 +72,7 @@ class WorkerService:
         finally:
             renewal_stop.set()
             renewal_thread.join(timeout=self.renew_interval + 1)
-            self.store.heartbeat(self.worker_id, self.tier, "idle")
+            self._idle_heartbeat(force=True)
         return True
 
     def _renew_while_running(self, task_id: str, attempt: int,
@@ -81,12 +91,27 @@ class WorkerService:
         self.store.init()
         self.store.heartbeat(self.worker_id, self.tier, "idle")
         log.info("worker started id=%s tier=%s", self.worker_id, self.tier)
+        failures = 0
         try:
             while not self.stop_event.is_set():
-                if not self.run_once():
+                try:
+                    worked = self.run_once()
+                    failures = 0
+                except Exception:
+                    # A database outage must not kill the worker. Any claimed task keeps
+                    # its lease and is recovered by the monitor if this attempt is lost.
+                    failures += 1
+                    backoff = min(MAX_ERROR_BACKOFF_SECONDS, self.poll_interval * 2 ** failures)
+                    log.exception("worker loop error; retrying in %.2fs", backoff)
+                    self.stop_event.wait(backoff)
+                    continue
+                if not worked:
                     self.stop_event.wait(self.poll_interval)
         finally:
-            self.store.mark_worker_offline(self.worker_id)
+            try:
+                self.store.mark_worker_offline(self.worker_id)
+            except Exception:
+                log.exception("could not mark worker offline id=%s", self.worker_id)
             log.info("worker stopped id=%s", self.worker_id)
 
 

@@ -1,0 +1,106 @@
+{
+  "measured_at": "2026-10-05T00:41:11.730044+00:00",
+  "provider": "Claude API (claude-haiku-4-5 small / claude-sonnet-5-5 large)",
+  "dataset_size": 50,
+  "baseline": {
+    "strategy": "all-large",
+    "correct": 50,
+    "accuracy_pct": 100.0,
+    "estimated_cost": 0.032556
+  },
+  "all_small": {
+    "correct": 49,
+    "accuracy_pct": 98.0,
+    "estimated_cost": 0.018186
+  },
+  "threshold_runs": [
+    {
+      "difficulty_threshold": 0.2,
+      "correct": 50,
+      "accuracy_pct": 100.0,
+      "quality_retention_pct": 100.0,
+      "estimated_cost": 0.028651,
+      "cost_saving_pct": 11.99,
+      "routing": {
+        "small": 27,
+        "large": 23
+      },
+      "failed_case_ids": []
+    },
+    {
+      "difficulty_threshold": 0.25,
+      "correct": 50,
+      "accuracy_pct": 100.0,
+      "quality_retention_pct": 100.0,
+      "estimated_cost": 0.028651,
+      "cost_saving_pct": 11.99,
+      "routing": {
+        "small": 27,
+        "large": 23
+      },
+      "failed_case_ids": []
+    },
+    {
+      "difficulty_threshold": 0.3,
+      "correct": 50,
+      "accuracy_pct": 100.0,
+      "quality_retention_pct": 100.0,
+      "estimated_cost": 0.026931,
+      "cost_saving_pct": 17.28,
+      "routing": {
+        "small": 30,
+        "large": 20
+      },
+      "failed_case_ids": []
+    },
+    {
+      "difficulty_threshold": 0.4,
+      "correct": 50,
+      "accuracy_pct": 100.0,
+      "quality_retention_pct": 100.0,
+      "estimated_cost": 0.024591,
+      "cost_saving_pct": 24.47,
+      "routing": {
+        "small": 35,
+        "large": 15
+      },
+      "failed_case_ids": []
+    },
+    {
+      "difficulty_threshold": 0.55,
+      "correct": 50,
+      "accuracy_pct": 100.0,
+      "quality_retention_pct": 100.0,
+      "estimated_cost": 0.021163,
+      "cost_saving_pct": 35.0,
+      "routing": {
+        "small": 48,
+        "large": 2
+      },
+      "failed_case_ids": []
+    },
+    {
+      "difficulty_threshold": 0.7,
+      "correct": 49,
+      "accuracy_pct": 98.0,
+      "quality_retention_pct": 98.0,
+      "estimated_cost": 0.018186,
+      "cost_saving_pct": 44.14,
+      "routing": {
+        "small": 50,
+        "large": 0
+      },
+      "failed_case_ids": [
+        "numeric-009"
+      ]
+    }
+  ],
+  "limitations": [
+    "One recorded sample per case and tier at default sampling settings; costs use measured token usage at list prices.",
+    "50 hand-written cases are a smoke test of the routing trade-off, not a general quality benchmark."
+  ],
+  "models": {
+    "small": "claude-haiku-4-5",
+    "large": "claude-sonnet-5-5"
+  }
+}

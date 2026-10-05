@@ -5,7 +5,7 @@ import uuid
 import pytest
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from app.store import Base, SchedulerStore, Task, retry_delay_seconds
+from app.store import Base, SchedulerStore, Task, as_utc, retry_delay_seconds
 
 
 POSTGRES_TEST_URL = os.getenv("TEST_DATABASE_URL")
@@ -44,7 +44,7 @@ def assert_retry_eligibility(store):
     before = datetime.now(timezone.utc)
     assert store.fail_or_retry(task["id"], "worker-a", first["attempt"], "HTTP 503") == "queued"
     queued = store.get_task(task["id"])
-    retry_at = datetime.fromisoformat(queued["next_attempt_at"]).replace(tzinfo=timezone.utc)
+    retry_at = as_utc(datetime.fromisoformat(queued["next_attempt_at"]))
     delay = (retry_at - before).total_seconds()
     assert 1 <= delay <= 2.1
     assert store.claim("worker-b", task["route_tier"]) is None

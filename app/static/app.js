@@ -364,6 +364,14 @@ document.addEventListener('keydown', (event) => {
 });
 
 showView(location.hash.slice(1));
+// Hide demo-only controls when the API runs with DEMO_MODE=false.
+api('/health').then((health) => {
+  if (health.demo_mode === false) {
+    $('#demoBtn').hidden = true;
+    $('#failOnce').checked = false;
+    $('#failOnce').closest('label').hidden = true;
+  }
+}).catch(() => {});
 async function poll() {
   if (!document.hidden) await refresh();
   setTimeout(poll, 2000);
