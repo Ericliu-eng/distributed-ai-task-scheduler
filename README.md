@@ -60,7 +60,7 @@ Compose waits for PostgreSQL health, then starts the API, two tier-affine worker
 2. In **Overview**, check current status, then inspect completion rate, queue pressure, and p50/p95 end-to-end latency over the last 5, 15, or 60 minutes. Expand a task with **+** to inspect its routing reason, attempts, and result.
 3. Search by prompt or task ID, or filter the queue by status to focus on active or failed work.
 4. Switch to **Activity** and select **Retries & failures** to find the simulated failure; its task succeeds on attempt 2.
-5. Review model distribution and estimated savings in the routing summary, then open **Benchmarks** for saved queue, crash-recovery, and fixture-evaluation reports.
+5. Review model distribution and estimated savings in the routing summary, then open **Benchmarks** for saved queue, crash-recovery, and Claude routing-evaluation reports.
 
 ## API
 
@@ -108,7 +108,7 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-Tests cover routing, concurrent idempotent submissions, jittered retry backoff and eligibility, priority claims, lease renewal, stale-task recovery, competing completion/failure writes, recovery during stale write-back, benchmark statistics, saved benchmark reports, all four graders, and the reference cost-quality result. Concurrency regressions use independent database connections and synchronized interleavings, with PostgreSQL coverage enabled by `TEST_DATABASE_URL`.
+Tests cover routing, concurrent idempotent submissions, jittered retry backoff and eligibility, priority claims, lease renewal, stale-task recovery, competing completion/failure writes, recovery during stale write-back, benchmark statistics, saved benchmark reports, all four graders, answer extraction from model output, resumable Claude response collection, and the reference cost-quality result. Concurrency regressions use independent database connections and synchronized interleavings, with PostgreSQL coverage enabled by `TEST_DATABASE_URL`.
 Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
 
 ## Performance benchmark
@@ -174,25 +174,45 @@ This is a single local Windows 11 / Python 3.11 / PostgreSQL 16 run. It measures
 
 ## Routing cost-quality evaluation
 
-The repository includes a fixed 50-case dataset with arithmetic, structured extraction, classification, and executable code graders. Compare the all-large baseline with multiple routing thresholds:
+The repository includes a fixed 50-case dataset (25 easy, 25 hard) with arithmetic, structured extraction, classification, and executable code graders. Every prompt is self-contained: hard cases carry their own incident timelines, contract histories, ledgers, and specifications, so prompt length reflects real content. The evaluation compares an all-large baseline with multiple routing thresholds.
+
+### Claude results
+
+```bash
+python -m pip install -r requirements-dev.txt
+ANTHROPIC_API_KEY=... python -m bench.evaluate --provider anthropic \
+  --output bench/results/routing-evaluation-claude.json
+```
+
+The small tier is `claude-haiku-4-5` and the large tier is `claude-sonnet-5-5`. Each response, with its token usage and cost, is appended to [`bench/results/claude-responses.jsonl`](bench/results/claude-responses.jsonl) as it arrives. Interrupted runs resume, and rerunning the command re-grades the recorded responses without new API calls. The full run made 100 calls and cost **$0.05**.
+
+| Strategy / difficulty threshold | Correct | Quality retention | Cost saving | Small / large |
+| --- | ---: | ---: | ---: | ---: |
+| All large (Sonnet 5.5) | 50 / 50 | 100% | — | 0 / 50 |
+| All small (Haiku 4.5) | 49 / 50 | 98% | 44.14% | 50 / 0 |
+| 0.25 | 50 / 50 | 100% | 11.99% | 27 / 23 |
+| 0.40 | 50 / 50 | 100% | 24.47% | 35 / 15 |
+| **0.55 (default)** | **50 / 50** | **100%** | **35.00%** | 48 / 2 |
+| 0.70 | 49 / 50 | 98% | 44.14% | 50 / 0 |
+
+At the default threshold, only the two longest prompts reach Sonnet. One of them is the multi-step inventory ledger (`numeric-009`), the only case Haiku answered incorrectly, so routing keeps full baseline quality at 35% lower measured cost. Cost savings are capped at about 44% because Sonnet 5.5's list price is only 2x Haiku 4.5's.
+
+Read these numbers with their limits:
+
+- One recorded sample per case and tier at default sampling settings. A rerun can differ.
+- The dataset separates the tiers on only one case. It shows the routing and cost mechanics, not a general quality benchmark; harder cases are needed to measure a real quality gap.
+- Graders extract answers instead of requiring exact formatting. String fields compare case-insensitively, a classification label counts on its own first or last line, and fenced code or JSON is unwrapped. These rules were finalized after reviewing the first run, where both models lost points on formatting and on one ambiguous answer key (`keyboard` vs. the source text's `keyboards`). The rules apply equally to both tiers, and the raw responses are committed for review.
+
+### Deterministic fixture adapter
 
 ```bash
 python -m bench.evaluate --output bench/results/routing-evaluation.json
 ```
 
-At the default `0.55` difficulty threshold, the deterministic fixture adapter retains **90%** of the all-large baseline score while reducing estimated cost by **50%** (30 small / 20 large). The full threshold curve and failed case IDs are stored in [`bench/results/routing-evaluation.json`](bench/results/routing-evaluation.json).
-
-| Difficulty threshold | Quality retention | Cost saving | Small / large |
-| ---: | ---: | ---: | ---: |
-| 0.30 | 96% | 45% | 27 / 23 |
-| 0.45 | 90% | 50% | 30 / 20 |
-| 0.55 | 90% | 50% | 30 / 20 |
-| 0.70 | 50% | 83.33% | 50 / 0 |
-
-This fixture adapter makes routing, grading, and cost accounting deterministic and CI-safe; it is not evidence of real LLM quality. Before placing quality retention on a resume, run the unchanged dataset and graders through real small- and large-model provider adapters.
+Without an API key, the evaluation uses canned responses stored in the dataset. It keeps routing, grading, and cost accounting deterministic for CI. It is not evidence of model quality. Results are stored in [`bench/results/routing-evaluation.json`](bench/results/routing-evaluation.json).
 
 ## Known limitations and next steps
 
 - The additive startup migration handles lease, recovery-count, and retry-eligibility columns; a production deployment should adopt a full migration framework before more schema changes.
 - PostgreSQL is used for transactional state management, not claimed as universally superior to dedicated brokers.
-- Replace deterministic fixture responses with real provider adapters before treating the routing evaluation as evidence of model quality.
+- Prompt length is a weak difficulty signal. Add harder evaluation cases and compare it with a learned classifier before tuning the threshold further.
