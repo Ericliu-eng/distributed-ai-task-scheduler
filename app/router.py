@@ -1,5 +1,8 @@
 from dataclasses import dataclass
 
+# Fixed per-request cost estimates used by the live dashboard and fixture evaluation.
+TIER_COST = {"small": 0.003, "large": 0.018}
+
 @dataclass(frozen=True)
 class RoutingDecision:
     tier: str
@@ -24,4 +27,4 @@ def route_task(prompt: str, sla: str, small_depth: int, large_depth: int,
     else:
         tier = "small"
         reason = f"Short prompt + standard SLA → difficulty {difficulty:.2f}, low-cost tier preferred"
-    return RoutingDecision(tier, reason, difficulty, 0.018 if tier == "large" else 0.003)
+    return RoutingDecision(tier, reason, difficulty, TIER_COST[tier])

@@ -6,5 +6,7 @@ COPY app ./app
 COPY worker ./worker
 COPY monitor ./monitor
 COPY bench/results ./bench/results
+RUN useradd --system --no-create-home orbit
+USER orbit
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]

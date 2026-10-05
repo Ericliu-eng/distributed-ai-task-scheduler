@@ -1,32 +1,46 @@
 from __future__ import annotations
 
 import argparse
-import builtins
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 import json
 from pathlib import Path
 import re
 import string
+import subprocess
+import sys
 from typing import Any
 
-from app.router import route_task
+from app.router import TIER_COST, route_task
 
 
 DEFAULT_DATASET = Path(__file__).with_name("prompts.jsonl")
 DEFAULT_RESPONSES = Path(__file__).with_name("results") / "claude-responses.jsonl"
 DEFAULT_THRESHOLDS = [0.2, 0.25, 0.3, 0.4, 0.55, 0.7]
-SMALL_COST = 0.003
-LARGE_COST = 0.018
+SMALL_COST = TIER_COST["small"]
+LARGE_COST = TIER_COST["large"]
 FENCED_BLOCK = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
-SAFE_BUILTINS = {
-    name: getattr(builtins, name)
-    for name in (
-        "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float", "int", "isinstance",
-        "len", "list", "map", "max", "min", "range", "reversed", "set", "sorted", "str", "sum",
-        "tuple", "zip",
-    )
-}
+SAFE_BUILTINS = (
+    "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float", "int", "isinstance",
+    "len", "list", "map", "max", "min", "range", "reversed", "set", "sorted", "str", "sum",
+    "tuple", "zip",
+)
+CODE_TIMEOUT_SECONDS = 5
+# Runs in a separate isolated interpreter so a hanging or crashing answer cannot take
+# the evaluation down. Restricted builtins limit accidents; this is not a security sandbox.
+CODE_RUNNER = """
+import builtins, json, sys
+payload = json.load(sys.stdin)
+# One namespace for globals and locals so recursive helpers can see themselves.
+namespace = {"__builtins__": {name: getattr(builtins, name) for name in payload["builtins"]}}
+try:
+    exec(payload["code"], namespace)
+    passed = all(bool(eval(assertion, namespace)) for assertion in payload["assertions"])
+except BaseException:
+    passed = False
+print(json.dumps(passed))
+"""
 
 
 @dataclass(frozen=True)
@@ -100,14 +114,21 @@ def grade(case: EvaluationCase, response: str) -> bool:
             for key, value in case.answer.items()
         )
     if case.grader == "code_assert":
-        # One namespace for globals and locals so recursive helpers can see themselves.
-        namespace: dict[str, Any] = {"__builtins__": dict(SAFE_BUILTINS)}
-        try:
-            exec(response, namespace)
-            return all(bool(eval(assertion, namespace)) for assertion in case.assertions)
-        except Exception:
-            return False
+        return _run_code_assertions(response, case.assertions)
     raise ValueError(f"unknown grader: {case.grader}")
+
+
+@lru_cache(maxsize=None)
+def _run_code_assertions(code: str, assertions: tuple[str, ...]) -> bool:
+    payload = json.dumps({"code": code, "assertions": list(assertions), "builtins": SAFE_BUILTINS})
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", CODE_RUNNER], input=payload,
+            capture_output=True, text=True, timeout=CODE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return completed.stdout.strip() == "true"
 
 
 @dataclass(frozen=True)

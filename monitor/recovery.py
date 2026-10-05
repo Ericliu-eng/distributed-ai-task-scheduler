@@ -32,7 +32,12 @@ class RecoveryMonitor:
         log.info("recovery monitor started interval=%ss", self.interval)
         try:
             while not self.stop_event.is_set():
-                self.run_once()
+                try:
+                    self.run_once()
+                except Exception:
+                    # Keep scanning after transient database errors; expired leases
+                    # stay expired, so the next successful pass recovers them.
+                    log.exception("recovery pass failed; retrying in %ss", self.interval)
                 self.stop_event.wait(self.interval)
         finally:
             log.info("recovery monitor stopped")

@@ -5,17 +5,13 @@ from math import floor
 
 from sqlalchemy import func, select
 
-from app.store import Event, SchedulerStore, Task
+from app.store import Event, SchedulerStore, Task, as_utc
 
 
 STATES = {
     "routed": "queued", "claimed": "running", "retry": "queued",
     "recovered": "queued", "succeeded": "succeeded", "failed": "failed",
 }
-
-
-def as_utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def percentile(values: list[float], percent: float) -> float | None:

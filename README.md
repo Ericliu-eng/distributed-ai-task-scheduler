@@ -89,6 +89,8 @@ curl http://localhost:8000/benchmarks/routing
 - **Duplicate submission:** the unique idempotency key returns the existing logical task, including concurrent submissions through independent API processes. The winning request returns HTTP 201; duplicates return HTTP 200 without extra routing events.
 - **Late write-back:** completion, failure/retry, and lease renewal atomically require the same worker ID, attempt, and `running` state in the database update. Recovery invalidates the old owner; a reused worker ID still cannot write for an earlier attempt. State changes and their events commit together.
 - **Worker crash:** claims receive a 15-second lease that is renewed every 3 seconds. The monitor checks every 2 seconds and requeues expired work for a new attempt.
+- **Database outage:** workers and the monitor log the error and keep running; workers back off exponentially up to 10 seconds. A task claimed before the outage keeps its lease, and the monitor recovers it if that attempt is lost.
+- **Demo controls:** `DEMO_MODE` (default `true`) enables `POST /demo/reset`, which deletes all tasks, and the `fail_once` simulated-failure flag. Set `DEMO_MODE=false` anywhere the API is reachable by others; both then return HTTP 403 and the dashboard hides them.
 
 ## Routing policy
 
@@ -109,7 +111,7 @@ pytest -q
 ```
 
 Tests cover routing, concurrent idempotent submissions, jittered retry backoff and eligibility, priority claims, lease renewal, stale-task recovery, competing completion/failure writes, recovery during stale write-back, benchmark statistics, saved benchmark reports, all four graders, answer extraction from model output, resumable Claude response collection, and the reference cost-quality result. Concurrency regressions use independent database connections and synchronized interleavings, with PostgreSQL coverage enabled by `TEST_DATABASE_URL`.
-Pull requests also run a PostgreSQL integration test in GitHub Actions: eight independent workers claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
+Pull requests also run a PostgreSQL integration test in GitHub Actions: eight worker threads, each with its own database connection, claim and complete 100 tasks through `SKIP LOCKED`, while the test verifies that every task has exactly one owner and one successful attempt.
 
 ## Performance benchmark
 
@@ -119,7 +121,7 @@ Run a disposable SQLite benchmark locally:
 python -m bench.run --tasks 200 --workers 8
 ```
 
-The JSON output records throughput and p50/p95/p99 queue and total latency, plus task counts and routing distribution. For a PostgreSQL measurement, create a dedicated disposable database and run:
+The JSON output records throughput, p50/p95/p99 queue and total latency, task counts, routing distribution, and a duplicate-claim check (every task must have exactly one claim event and one attempt). Workers run as threads in one process, each with its own database connection pool, so claims contend in the database exactly as separate processes would. For a PostgreSQL measurement, create a dedicated disposable database and run:
 
 ```bash
 BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_benchmark \
@@ -141,7 +143,7 @@ The safety flag is required because the benchmark clears task and event rows bef
 | Queue latency p99 | 10,392.02 ms |
 | Total latency p99 | 10,419.04 ms |
 
-This is a single local Windows 11 / Python 3.13.12 / PostgreSQL 16 run using mock inference with provider delay disabled. Tasks are submitted as a burst and pinned to a 50/50 tier distribution so all eight workers participate; queue latency starts at each task's creation time and therefore includes time spent waiting behind the burst. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](bench/results/postgres-1000-tasks.json); rerun the benchmark on the target hardware before using the number in a resume.
+This is a single local Windows 11 / Python 3.13.12 / PostgreSQL 16 run using mock inference with provider delay disabled. Tasks are submitted as a burst and pinned to a 50/50 tier distribution so all eight workers participate; queue latency starts at each task's creation time and therefore includes time spent waiting behind the burst. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](bench/results/postgres-1000-tasks.json). Throughput depends on the host and database setup; three runs against PostgreSQL 16 in Docker on the same machine measured 97–117 tasks/s, each with zero duplicate claims.
 
 ## Crash-recovery benchmark
 
@@ -174,7 +176,7 @@ This is a single local Windows 11 / Python 3.11 / PostgreSQL 16 run. It measures
 
 ## Routing cost-quality evaluation
 
-The repository includes a fixed 50-case dataset (25 easy, 25 hard) with arithmetic, structured extraction, classification, and executable code graders. Every prompt is self-contained: hard cases carry their own incident timelines, contract histories, ledgers, and specifications, so prompt length reflects real content. The evaluation compares an all-large baseline with multiple routing thresholds.
+The repository includes a fixed 50-case dataset (25 easy, 25 hard) with arithmetic, structured extraction, classification, and executable code graders. Generated code runs in a separate isolated Python process with restricted builtins and a 5-second timeout; that contains hangs and crashes but is not a security sandbox. Every prompt is self-contained: hard cases carry their own incident timelines, contract histories, ledgers, and specifications, so prompt length reflects real content. The evaluation compares an all-large baseline with multiple routing thresholds.
 
 ### Claude results
 
@@ -213,6 +215,7 @@ Without an API key, the evaluation uses canned responses stored in the dataset. 
 
 ## Known limitations and next steps
 
-- The additive startup migration handles lease, recovery-count, and retry-eligibility columns; a production deployment should adopt a full migration framework before more schema changes.
+- The additive startup migration handles lease, recovery-count, and retry-eligibility columns plus the claim (`status, route_tier, priority, created_at`) and lease-scan (`status, lease_until`) indexes; a production deployment should adopt a full migration framework before more schema changes.
+- The API has no authentication or rate limiting; it is a single-tenant demo service.
 - PostgreSQL is used for transactional state management, not claimed as universally superior to dedicated brokers.
 - Prompt length is a weak difficulty signal. Add harder evaluation cases and compare it with a learned classifier before tuning the threshold further.
