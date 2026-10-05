@@ -2,27 +2,17 @@
 
 Orbit is a demo-ready multi-worker inference scheduler that routes each request to a small or large model tier using prompt difficulty, SLA, and live queue pressure. Every decision is explainable, workers execute concurrently, failed calls retry automatically, and the dashboard quantifies latency, reliability, routing mix, and estimated savings.
 
-Reference results on local PostgreSQL 16: **1,000/1,000 tasks completed at 135.4 tasks/s with zero duplicate claims** (median of three runs), plus **20/20 crashed tasks recovered with 197.12 ms p95 crash-to-completion time** under the benchmark's short lease configuration. See the methodology and limitations below before comparing these numbers.
+Reference results on local PostgreSQL 16: **1,000/1,000 tasks completed at 135.4 tasks/s with zero duplicate claims** (median of three runs), plus **20/20 crashed tasks recovered with 197.12 ms p95 crash-to-completion time** under the benchmark's short lease configuration. On a 50-case graded evaluation with Claude Haiku 4.5 and Sonnet 5.5, routing at the default threshold kept **100% of all-Sonnet quality at 35% lower measured cost**. See the methodology and limitations below before comparing these numbers.
+
+![Animated flow: a task is routed to the large tier, claimed by exactly one worker through SKIP LOCKED, recovered after that worker is killed, and completed by a second worker while the first worker's late write is rejected](docs/demo/orbit-flow.gif)
+
+One task's path through a worker crash: lease expiry returns it to the queue, and the attempt number fences the dead worker's late write. This is an illustrated flow, not a recording; it is rendered by [`docs/demo/render_flow.py`](docs/demo/render_flow.py), and a [static final frame](docs/demo/orbit-flow.png) is available.
 
 ## Why this design
 
 AI requests are not equally difficult or urgent, but a naive gateway sends everything to one expensive model. Orbit separates routing from execution. A deterministic policy makes the cost/latency decision auditable; a transactional task store makes state changes observable; tier-affine workers consume the queue independently. The execution contract is **at-least-once**, with idempotency keys preventing duplicate logical submissions and the claim attempt acting as a fencing token on write-back.
 
-The MVP uses mock inference deliberately, so the entire system can be judged without an API key, network access, rate limits, or nondeterministic model behavior. Replace `mock_inference()` with a provider adapter to connect a real model.
-
-```text
-Browser / API client
-        │
-        ▼
- FastAPI Gateway ─── Explainable Router
-        │                 │ small / large + reason
-        ▼                 ▼
-     SQL task queue (SQLite locally, PostgreSQL in Docker)
-        │                         │
-        ▼                         ▼
- Small worker process       Large worker process
-        └──────── result, retries, timing ────────┘
-```
+The MVP uses mock inference deliberately, so the entire system can be judged without an API key, network access, rate limits, or nondeterministic model behavior. Replace `execute()` in `worker/executor.py` with a provider adapter to connect a real model; the routing evaluation already calls Claude through `bench/claude_adapter.py`.
 
 ## Quick start
 
