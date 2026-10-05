@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Orbit · Task overview</title>
-  <link rel="stylesheet" href="/static/styles.css?v=6">
+  <link rel="stylesheet" href="/static/styles.css?v=8">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -39,10 +39,10 @@
     <p id="connectionNotice" class="notice warning" role="status" hidden>Live updates are unavailable. Displayed data may be out of date. Reconnecting automatically…</p>
     <section id="overview" class="view" aria-label="Task overview">
       <div class="metrics" aria-label="Live workload summary">
-        <div><span class="metric-label">Active tasks</span><strong id="mActive">—</strong><span class="metric-detail" id="mQueueDetail">Waiting for data</span></div>
-        <div><span class="metric-label">Completed</span><strong id="mCompleted">—</strong><span class="metric-detail" id="mSuccess">No completed tasks yet</span></div>
-        <div><span class="metric-label">Failed</span><strong id="mFailed">—</strong><span class="metric-detail" id="mRecovery">0 retries · 0 recoveries</span></div>
-        <div><span class="metric-label">Workers online</span><strong id="workerCount">—</strong><span class="metric-detail" id="workerDetail">Waiting for heartbeats</span></div>
+        <div><span class="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></svg></span><span class="metric-label">Active tasks</span><strong id="mActive">—</strong><span class="metric-detail" id="mQueueDetail">Waiting for data</span></div>
+        <div><span class="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span class="metric-label">Completed</span><strong id="mCompleted">—</strong><span class="metric-detail" id="mSuccess">No completed tasks yet</span></div>
+        <div><span class="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 7v6M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg></span><span class="metric-label">Failed</span><strong id="mFailed">—</strong><span class="metric-detail" id="mRecovery">0 retries · 0 recoveries</span></div>
+        <div><span class="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="6" rx="1.5"/><rect x="4" y="13" width="16" height="6" rx="1.5"/><path d="M8 8h.01M8 16h.01"/></svg></span><span class="metric-label">Workers online</span><strong id="workerCount">—</strong><span class="metric-detail" id="workerDetail">Waiting for heartbeats</span></div>
       </div>
       <section class="performance-section" aria-labelledby="performanceTitle">
         <div class="section-toolbar">
@@ -75,7 +75,7 @@
     </section>
     <section id="benchmarks" class="view" aria-label="Saved benchmarks" hidden>
       <p class="notice">Saved reports from controlled workloads. These results are separate from the live queue.</p>
-      <article class="panel benchmark-panel"><div class="panel-head"><div><h2>Queue performance</h2><p class="section-description">Scheduler throughput and queue latency</p></div><span class="neutral-tag" id="perfDatabase">Loading…</span></div><div class="bench-stats"><div><span class="metric-label">Throughput</span><strong id="perfThroughput">—</strong></div><div><span class="metric-label">Completed</span><strong id="perfCompleted">—</strong></div><div><span class="metric-label">Queue p50</span><strong id="perfP50">—</strong></div><div><span class="metric-label">Queue p99</span><strong id="perfP99">—</strong></div></div><p class="footnote" id="perfMeta">Loading saved report…</p></article>
+      <article class="panel benchmark-panel"><div class="panel-head"><div><h2>Queue performance</h2><p class="section-description">Scheduler throughput and queue latency</p></div><span class="neutral-tag" id="perfDatabase">Loading…</span></div><div class="bench-stats"><div><span class="metric-label">Throughput</span><strong id="perfThroughput">—</strong></div><div><span class="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><span class="metric-label">Completed</span><strong id="perfCompleted">—</strong></div><div><span class="metric-label">Queue p50</span><strong id="perfP50">—</strong></div><div><span class="metric-label">Queue p99</span><strong id="perfP99">—</strong></div></div><p class="footnote" id="perfMeta">Loading saved report…</p></article>
       <article class="panel benchmark-panel"><div class="panel-head"><div><h2>Crash recovery</h2><p class="section-description">Lease expiry to successful replacement</p></div><span class="neutral-tag" id="recoveryDatabase">Loading…</span></div><div class="bench-stats"><div><span class="metric-label">Recovered</span><strong id="recoveryCompleted">—</strong></div><div><span class="metric-label">Crash → complete p50</span><strong id="recoveryP50">—</strong></div><div><span class="metric-label">Crash → complete p95</span><strong id="recoveryP95">—</strong></div><div><span class="metric-label">Stale writes rejected</span><strong id="recoveryFenced">—</strong></div></div><p class="footnote" id="recoveryMeta">Loading saved report…</p></article>
       <article class="panel benchmark-panel"><div class="panel-head"><div><h2>Routing evaluation</h2><p class="section-description">Measured cost and graded quality across routing thresholds</p></div><span class="neutral-tag" id="routingProvider">Loading…</span></div><div class="table-wrap"><table><thead><tr><th scope="col">Threshold</th><th scope="col">Quality retained</th><th scope="col">Cost saving</th><th scope="col">Small / large</th></tr></thead><tbody id="routingRows"><tr><td colspan="4" class="empty">Loading saved report…</td></tr></tbody></table></div><p class="footnote" id="routingMeta"></p></article>
     </section>
