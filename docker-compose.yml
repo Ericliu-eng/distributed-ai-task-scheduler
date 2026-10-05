@@ -7,7 +7,8 @@ services:
       POSTGRES_DB: scheduler
     ports:
       # Local tooling only; never publish the default credentials beyond loopback.
-      - "127.0.0.1:5432:5432"
+      # Set POSTGRES_PORT if another project already uses 5432.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

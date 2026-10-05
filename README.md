@@ -2,7 +2,7 @@
 
 Orbit is a demo-ready multi-worker inference scheduler that routes each request to a small or large model tier using prompt difficulty, SLA, and live queue pressure. Every decision is explainable, workers execute concurrently, failed calls retry automatically, and the dashboard quantifies latency, reliability, routing mix, and estimated savings.
 
-Reference results on local PostgreSQL 16: **1,000/1,000 tasks completed at 129.7 tasks/s**, plus **20/20 crashed tasks recovered with 197.12 ms p95 crash-to-completion time** under the benchmark's short lease configuration. See the methodology and limitations below before comparing these numbers.
+Reference results on local PostgreSQL 16: **1,000/1,000 tasks completed at 135.4 tasks/s with zero duplicate claims** (median of three runs), plus **20/20 crashed tasks recovered with 197.12 ms p95 crash-to-completion time** under the benchmark's short lease configuration. See the methodology and limitations below before comparing these numbers.
 
 ## Why this design
 
@@ -135,15 +135,16 @@ The safety flag is required because the benchmark clears task and event rows bef
 | Workload | Result |
 | --- | ---: |
 | Tasks completed | 1,000 / 1,000 |
-| Workers | 8 |
+| Workers | 8 threads, separate connection pools |
+| Duplicate claims | 0 |
 | Tier distribution | 500 small / 500 large |
-| Throughput | 129.7 tasks/s |
-| Queue latency p50 | 6,076.5 ms |
-| Queue latency p95 | 9,853.55 ms |
-| Queue latency p99 | 10,392.02 ms |
-| Total latency p99 | 10,419.04 ms |
+| Throughput | 135.42 tasks/s |
+| Queue latency p50 | 8,226 ms |
+| Queue latency p95 | 13,238.7 ms |
+| Queue latency p99 | 14,409.65 ms |
+| Total latency p99 | 14,438.66 ms |
 
-This is a single local Windows 11 / Python 3.13.12 / PostgreSQL 16 run using mock inference with provider delay disabled. Tasks are submitted as a burst and pinned to a 50/50 tier distribution so all eight workers participate; queue latency starts at each task's creation time and therefore includes time spent waiting behind the burst. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](bench/results/postgres-1000-tasks.json). Throughput depends on the host and database setup; three runs against PostgreSQL 16 in Docker on the same machine measured 97–117 tasks/s, each with zero duplicate claims.
+This is the median of three runs (131.2, 135.4, and 171.7 tasks/s) on Windows 11 / Python 3.11 against PostgreSQL 16 in Docker, using mock inference with provider delay disabled. Tasks are submitted as a burst and pinned to a 50/50 tier distribution so all eight workers participate; queue latency starts at each task's creation time and therefore includes time spent waiting behind the burst. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](bench/results/postgres-1000-tasks.json). Throughput varies noticeably between sessions on the same machine: an earlier set of three runs measured 97–117 tasks/s. Every run had zero duplicate claims.
 
 ## Crash-recovery benchmark
 
