@@ -41,7 +41,9 @@ def assert_retry_eligibility(store):
     task, _ = store.create_task("retry after a provider outage")
     first = store.claim("worker-a", task["route_tier"])
 
-    before = datetime.now(timezone.utc)
+    # Retry deadlines come from the database clock, so measure against it too.
+    with store.Session() as session:
+        before = store._db_now(session)
     assert store.fail_or_retry(task["id"], "worker-a", first["attempt"], "HTTP 503") == "queued"
     queued = store.get_task(task["id"])
     retry_at = as_utc(datetime.fromisoformat(queued["next_attempt_at"]))
@@ -50,7 +52,7 @@ def assert_retry_eligibility(store):
     assert store.claim("worker-b", task["route_tier"]) is None
 
     with store.Session.begin() as session:
-        session.get(Task, task["id"]).next_attempt_at = datetime.now(timezone.utc) - timedelta(milliseconds=1)
+        session.get(Task, task["id"]).next_attempt_at = store._db_now(session) - timedelta(milliseconds=1)
     second = store.claim("worker-b", task["route_tier"])
     assert second["attempt"] == 2
     assert second["next_attempt_at"] is None

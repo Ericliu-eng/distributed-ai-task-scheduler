@@ -16,7 +16,7 @@ import uuid
 from sqlalchemy import func, select, update
 
 from app.router import TIER_COST
-from app.store import Event, SchedulerStore, Task
+from app.store import Event, SchedulerStore, Task, as_utc
 from worker.main import WorkerService
 
 
@@ -101,6 +101,9 @@ def run_benchmark(database_url: str, task_count: int = 200,
         finally:
             worker_store.engine.dispose()
 
+    # Tasks are submitted before the timer starts, so queue wait is measured from
+    # the moment workers are released, not from each task's created_at.
+    released_at = datetime.now(timezone.utc)
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = [executor.submit(consume, *spec) for spec in worker_specs]
@@ -116,12 +119,12 @@ def run_benchmark(database_url: str, task_count: int = 200,
         ).scalars().all()
     duplicate_claims = sum(count - 1 for count in claims_per_task if count > 1)
     succeeded = [task for task in tasks if task["status"] == "succeeded"]
-    queue_latencies = [float(task["queue_ms"]) for task in succeeded]
-    total_latencies = [
-        float(task["queue_ms"] + task["run_ms"])
-        for task in succeeded
-        if task["queue_ms"] is not None and task["run_ms"] is not None
-    ]
+    def ms_since_release(timestamp: str) -> float:
+        elapsed = as_utc(datetime.fromisoformat(timestamp)) - released_at
+        return max(0.0, elapsed.total_seconds() * 1000)
+
+    queue_latencies = [ms_since_release(task["started_at"]) for task in succeeded]
+    total_latencies = [ms_since_release(task["finished_at"]) for task in succeeded]
     result = {
         "measured_at": datetime.now(timezone.utc).isoformat(),
         "database": setup_store.engine.dialect.name,
@@ -140,6 +143,7 @@ def run_benchmark(database_url: str, task_count: int = 200,
         "throughput_tasks_per_second": round(
             len(succeeded) / duration_seconds if duration_seconds else 0, 2
         ),
+        "latency_measured_from": "worker release (all tasks pre-submitted)",
         "queue_latency_ms": summarize(queue_latencies),
         "total_latency_ms": summarize(total_latencies),
         "routing": {

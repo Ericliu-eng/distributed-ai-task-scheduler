@@ -1,8 +1,8 @@
 {
-  "measured_at": "2026-10-04T19:37:25.183675+00:00",
+  "measured_at": "2026-10-16T22:57:21.546745+00:00",
   "database": "postgresql",
   "python": "3.11.0",
-  "platform": "Windows-10-10.0.26200-SP0",
+  "platform": "Windows-10-10.0.26300-SP0",
   "trials": 20,
   "tasks_succeeded": 20,
   "stale_writes_rejected": 20,
@@ -11,29 +11,29 @@
   "execution_mode": "worker subprocess exits after claim; replacement uses mock inference without provider delay",
   "timings_ms": {
     "crash_to_detection_ms": {
-      "p50": 167.36,
-      "p95": 184.16,
-      "p99": 186.3
+      "p50": 141.87,
+      "p95": 159.75,
+      "p99": 160.63
     },
     "lease_expiry_to_detection_ms": {
-      "p50": 29.07,
-      "p95": 48.42,
-      "p99": 50.67
+      "p50": 20.79,
+      "p95": 34.57,
+      "p99": 37.09
     },
     "detection_to_reclaim_ms": {
-      "p50": 6.35,
-      "p95": 7.84,
-      "p99": 8.25
+      "p50": 6.26,
+      "p95": 8.44,
+      "p99": 10.12
     },
     "reclaim_to_completion_ms": {
-      "p50": 4.39,
-      "p95": 5.66,
-      "p99": 6.01
+      "p50": 5.15,
+      "p95": 7.09,
+      "p99": 13.52
     },
     "crash_to_completion_ms": {
-      "p50": 177.68,
-      "p95": 197.12,
-      "p99": 197.54
+      "p50": 154.4,
+      "p95": 168.61,
+      "p99": 172.29
     }
   },
   "limitations": [

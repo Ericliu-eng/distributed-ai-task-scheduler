@@ -3,11 +3,12 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
+from sqlalchemy import text
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.store import SchedulerStore
+from app.store import IdempotencyConflict, SchedulerStore
 from app.benchmarks import load_result
 from app.telemetry import timeseries
 
@@ -47,11 +48,29 @@ def health():
     return {"status": "ok", "workers": sum(w["status"] != "offline" for w in worker_rows),
             "demo_mode": DEMO_MODE}
 
+@app.get("/healthz")
+def healthz():
+    """Liveness: the process is up. Never touches the database."""
+    return {"status": "ok"}
+
+@app.get("/readyz")
+def readyz():
+    """Readiness: the database answers, so this instance can serve requests."""
+    try:
+        with store.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(503, "database unavailable") from exc
+    return {"status": "ready"}
+
 @app.post("/tasks", status_code=201)
 def create_task(payload: TaskCreate, response: Response):
     if payload.fail_once:
         require_demo_mode("Simulated failure")
-    task, created = store.create_task(**payload.model_dump())
+    try:
+        task, created = store.create_task(**payload.model_dump())
+    except IdempotencyConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     if not created:
         response.status_code = 200
     return {"task_id": task["id"], "status": task["status"], "route_tier": task["route_tier"],

@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 
 # Fixed per-request cost estimates used by the live dashboard and fixture evaluation.
-TIER_COST = {"small": 0.003, "large": 0.018}
+# The 2x ratio matches the list prices of the evaluated models (Haiku 4.5 vs Sonnet 5.5,
+# see bench/claude_adapter.py); measured evaluations use real token costs instead.
+TIER_COST = {"small": 0.003, "large": 0.006}
 
 @dataclass(frozen=True)
 class RoutingDecision:

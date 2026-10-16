@@ -35,10 +35,11 @@ Every decision stores a human-readable reason with the task. Prompt length is a 
 
 ## Failure semantics
 
-- **Provider failure:** a retryable failure returns the task to `queued` with a persisted `next_attempt_at`. The default delay grows exponentially from 1 to 30 seconds with deterministic 50–100% per-task jitter, configured through `RETRY_BASE_SECONDS` and `RETRY_MAX_SECONDS`. After the third failed attempt the task is marked `failed`.
-- **Duplicate submission:** the unique idempotency key returns the existing logical task, including concurrent submissions through independent API processes. The winning request returns HTTP 201; duplicates return HTTP 200 without extra routing events.
+- **Provider failure:** a retryable failure returns the task to `queued` with a persisted `next_attempt_at`. The delay doubles from a 1-second base up to a 30-second cap, with deterministic 50–100% per-task jitter, configured through `RETRY_BASE_SECONDS` and `RETRY_MAX_SECONDS`. With the default 3 attempts the waits are 0.5–1 s and then 1–2 s; the cap only matters with more attempts. After the third failed attempt the task is marked `failed`.
+- **Duplicate submission:** the unique idempotency key returns the existing logical task, including concurrent submissions through independent API processes. The winning request returns HTTP 201; duplicates return HTTP 200 without extra routing events. Each task stores a fingerprint of its prompt, SLA, priority, and failure flag, so reusing a key with a different body returns HTTP 409 instead of silently returning an unrelated task.
 - **Late write-back:** completion, failure/retry, and lease renewal atomically require the same worker ID, attempt, and `running` state in the database update. Recovery invalidates the old owner; a reused worker ID still cannot write for an earlier attempt. State changes and their events commit together.
 - **Worker crash:** claims receive a 15-second lease that is renewed every 3 seconds. The monitor checks every 2 seconds and requeues expired work for a new attempt.
+- **Clock skew:** on PostgreSQL, lease deadlines, retry times, heartbeats, and completion times all come from the database's `now()`, never from a worker's or the monitor's local clock, so a machine whose clock drifts cannot make live work look expired.
 - **Database outage:** workers and the monitor log the error and keep running; workers back off exponentially up to 10 seconds. A task claimed before the outage keeps its lease, and the monitor recovers it if that attempt is lost.
 - **Demo controls:** `DEMO_MODE` (default `true`) enables `POST /demo/reset`, which deletes all tasks, and the `fail_once` simulated-failure flag. Set `DEMO_MODE=false` anywhere the API is reachable by others; both then return HTTP 403 and the dashboard hides them.
 
@@ -50,6 +51,7 @@ curl -X POST http://localhost:8000/tasks \
   -d '{"prompt":"Explain why indexes speed up reads","sla":"standard","priority":5,"idempotency_key":"demo-001"}'
 
 curl http://localhost:8000/tasks/{task_id}
+curl http://localhost:8000/readyz
 curl http://localhost:8000/metrics/summary
 curl "http://localhost:8000/metrics/timeseries?minutes=15"
 curl http://localhost:8000/benchmarks/performance
@@ -57,7 +59,9 @@ curl http://localhost:8000/benchmarks/recovery
 curl http://localhost:8000/benchmarks/routing
 ```
 
-`POST /tasks` returns the task ID, initial state, selected tier, and route reason. Reusing an `idempotency_key` returns the existing task instead of creating another.
+`POST /tasks` returns the task ID, initial state, selected tier, and route reason. Reusing an `idempotency_key` with the same body returns the existing task; reusing it with a different body returns HTTP 409.
+
+`GET /healthz` reports liveness without touching the database. `GET /readyz` returns HTTP 503 when the database is unreachable; Compose uses it as the API health check.
 
 `GET /benchmarks/{performance|recovery|routing}` serves the saved reports from `bench/results/` without touching the queue; the dashboard's Benchmarks section renders all three.
 

@@ -42,11 +42,11 @@ def test_reference_threshold_has_reproducible_cost_quality_tradeoff():
         "strategy": "all-large",
         "correct": 50,
         "accuracy_pct": 100.0,
-        "estimated_cost": 0.9,
+        "estimated_cost": 0.3,
     }
     assert run["correct"] == 48
     assert run["quality_retention_pct"] == 96.0
-    assert run["cost_saving_pct"] == 45.0
+    assert run["cost_saving_pct"] == 27.0
     assert run["routing"] == {"small": 27, "large": 23}
     assert result["all_small"]["correct"] == 25
 

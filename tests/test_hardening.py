@@ -46,13 +46,16 @@ def test_init_creates_claim_and_lease_indexes():
 
 def test_metrics_aggregate_in_sql():
     store = make_store()
-    done, _ = store.create_task("finish me")
-    retried, _ = store.create_task("retry me", fail_once=True)
+    # Distinct priorities fix the claim order; equal created_at values made it flaky.
+    done, _ = store.create_task("finish me", priority=7)
+    retried, _ = store.create_task("retry me", priority=6)
     store.create_task("x" * 900)  # routed large, left queued
 
     first = store.claim("w", "small")
+    assert first["id"] == done["id"]
     store.finish(first["id"], "w", first["attempt"], "ok")
     second = store.claim("w", "small")
+    assert second["id"] == retried["id"]
     store.fail_or_retry(second["id"], "w", second["attempt"], "503")
     with store.Session.begin() as session:
         session.get(Task, retried["id"]).next_attempt_at = datetime.now(timezone.utc)
@@ -64,10 +67,23 @@ def test_metrics_aggregate_in_sql():
     assert (metrics["succeeded"], metrics["queued"], metrics["failed"]) == (2, 1, 0)
     assert (metrics["small"], metrics["large"]) == (2, 1)
     assert metrics["retries"] == 1
-    assert metrics["estimated_cost"] == pytest.approx(0.003 * 2 + 0.018)
-    assert metrics["cost_saved_pct"] == pytest.approx((1 - 0.024 / 0.054) * 100, abs=0.1)
+    assert metrics["estimated_cost"] == pytest.approx(0.003 * 2 + 0.006)
+    assert metrics["cost_saved_pct"] == pytest.approx((1 - 0.012 / 0.018) * 100, abs=0.1)
     assert metrics["avg_latency_ms"] >= 0
-    assert done["id"] in {first["id"], third["id"]}
+
+
+def test_recovered_attempts_are_not_counted_as_retries():
+    store = make_store()
+    store.create_task("crash me")
+    claimed = store.claim("w", "small", lease_seconds=0.01)
+    later = datetime.now(timezone.utc) + timedelta(seconds=1)
+    assert store.requeue_stale_tasks(now=later) == [claimed["id"]]
+    again = store.claim("w2", "small")
+    store.finish(again["id"], "w2", again["attempt"], "ok")
+
+    metrics = store.metrics()
+    assert again["attempt"] == 2
+    assert (metrics["retries"], metrics["recoveries"]) == (0, 1)
 
 
 def test_empty_metrics():
@@ -149,6 +165,33 @@ def test_demo_endpoints_require_demo_mode(monkeypatch):
 
     monkeypatch.setattr(api, "DEMO_MODE", True)
     assert api.reset_demo()["seeded"] == 5
+
+
+def test_api_rejects_idempotency_key_reuse_with_409(monkeypatch):
+    monkeypatch.setattr(api, "store", make_store())
+    first = api.create_task(api.TaskCreate(prompt="same request", idempotency_key="k1"), Response())
+    response = Response()
+    again = api.create_task(api.TaskCreate(prompt="same request", idempotency_key="k1"), response)
+    assert again["task_id"] == first["task_id"] and response.status_code == 200
+    with pytest.raises(HTTPException) as error:
+        api.create_task(api.TaskCreate(prompt="other request", idempotency_key="k1"), Response())
+    assert error.value.status_code == 409
+
+
+def test_liveness_and_readiness(monkeypatch):
+    monkeypatch.setattr(api, "store", make_store())
+    assert api.healthz() == {"status": "ok"}
+    assert api.readyz() == {"status": "ready"}
+
+    class Unreachable:
+        def connect(self):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(api.store, "engine", Unreachable())
+    assert api.healthz() == {"status": "ok"}
+    with pytest.raises(HTTPException) as error:
+        api.readyz()
+    assert error.value.status_code == 503
 
 
 def test_code_grader_times_out_instead_of_hanging(monkeypatch):

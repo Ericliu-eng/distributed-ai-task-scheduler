@@ -1,12 +1,12 @@
 {
-  "measured_at": "2026-10-05T00:41:11.963610+00:00",
+  "measured_at": "2026-10-16T20:54:37.219986+00:00",
   "provider": "deterministic fixture adapter",
   "dataset_size": 50,
   "baseline": {
     "strategy": "all-large",
     "correct": 50,
     "accuracy_pct": 100.0,
-    "estimated_cost": 0.9
+    "estimated_cost": 0.3
   },
   "all_small": {
     "correct": 25,
@@ -19,8 +19,8 @@
       "correct": 48,
       "accuracy_pct": 96.0,
       "quality_retention_pct": 96.0,
-      "estimated_cost": 0.495,
-      "cost_saving_pct": 45.0,
+      "estimated_cost": 0.219,
+      "cost_saving_pct": 27.0,
       "routing": {
         "small": 27,
         "large": 23
@@ -35,8 +35,8 @@
       "correct": 48,
       "accuracy_pct": 96.0,
       "quality_retention_pct": 96.0,
-      "estimated_cost": 0.495,
-      "cost_saving_pct": 45.0,
+      "estimated_cost": 0.219,
+      "cost_saving_pct": 27.0,
       "routing": {
         "small": 27,
         "large": 23
@@ -51,8 +51,8 @@
       "correct": 45,
       "accuracy_pct": 90.0,
       "quality_retention_pct": 90.0,
-      "estimated_cost": 0.45,
-      "cost_saving_pct": 50.0,
+      "estimated_cost": 0.21,
+      "cost_saving_pct": 30.0,
       "routing": {
         "small": 30,
         "large": 20
@@ -70,8 +70,8 @@
       "correct": 40,
       "accuracy_pct": 80.0,
       "quality_retention_pct": 80.0,
-      "estimated_cost": 0.375,
-      "cost_saving_pct": 58.33,
+      "estimated_cost": 0.195,
+      "cost_saving_pct": 35.0,
       "routing": {
         "small": 35,
         "large": 15
@@ -94,8 +94,8 @@
       "correct": 27,
       "accuracy_pct": 54.0,
       "quality_retention_pct": 54.0,
-      "estimated_cost": 0.18,
-      "cost_saving_pct": 80.0,
+      "estimated_cost": 0.156,
+      "cost_saving_pct": 48.0,
       "routing": {
         "small": 48,
         "large": 2
@@ -132,7 +132,7 @@
       "accuracy_pct": 50.0,
       "quality_retention_pct": 50.0,
       "estimated_cost": 0.15,
-      "cost_saving_pct": 83.33,
+      "cost_saving_pct": 50.0,
       "routing": {
         "small": 50,
         "large": 0

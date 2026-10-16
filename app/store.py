@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 import threading
 import uuid
@@ -8,6 +9,13 @@ from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, c
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.router import TIER_COST, route_task
+
+class IdempotencyConflict(Exception):
+    """An idempotency key was reused with a different request body."""
+
+def request_fingerprint(prompt: str, sla: str, priority: int, fail_once: bool) -> str:
+    """Hash the fields that define a logical task, for idempotency-key reuse checks."""
+    return sha256(json.dumps([prompt, sla, priority, fail_once]).encode()).hexdigest()
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -40,6 +48,8 @@ class Task(Base):
     __tablename__ = "tasks"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    # Fingerprint of the submitted fields; NULL for rows created before it existed.
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     prompt: Mapped[str] = mapped_column(Text)
     sla: Mapped[str] = mapped_column(String(16), default="standard")
     priority: Mapped[int] = mapped_column(Integer, default=5)
@@ -149,6 +159,8 @@ class SchedulerStore:
             statements.append(f"ALTER TABLE tasks ADD COLUMN lease_until {column_type}")
         if "recovery_count" not in existing:
             statements.append("ALTER TABLE tasks ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0")
+        if "request_hash" not in existing:
+            statements.append("ALTER TABLE tasks ADD COLUMN request_hash VARCHAR(64)")
         if "next_attempt_at" not in existing:
             column_type = "TIMESTAMPTZ" if self.engine.dialect.name == "postgresql" else "DATETIME"
             statements.append(f"ALTER TABLE tasks ADD COLUMN next_attempt_at {column_type}")
@@ -163,22 +175,52 @@ class SchedulerStore:
                 if "duplicate column" not in message and "already exists" not in message:
                     raise
 
+    def _db_now(self, session) -> datetime:
+        """Return the database clock so leases never depend on a worker's clock.
+
+        Workers, the API, and the recovery monitor may run on different machines;
+        comparing lease deadlines computed from their local clocks would let skew
+        recover live work early or keep dead work leased. PostgreSQL ``now()`` is
+        the transaction start time, so one transaction sees one consistent instant.
+        SQLite is a single-machine development backend and uses the local clock.
+        Use this only off the hot path; it costs a round trip (see ``_now_sql``).
+        """
+        if self.engine.dialect.name == "postgresql":
+            return as_utc(session.scalar(select(func.now())))
+        return utcnow()
+
+    def _now_sql(self):
+        """The database clock as a SQL expression, evaluated inside the statement.
+
+        Claims, renewals, and write-backs embed ``now()`` in the statement they
+        already run; fetching it first would add a round trip to every step.
+        """
+        return func.now() if self.engine.dialect.name == "postgresql" else utcnow()
+
     def _depths(self, session) -> tuple[int, int]:
         rows = session.execute(select(Task.route_tier, func.count()).where(Task.status == "queued").group_by(Task.route_tier)).all()
         counts = dict(rows)
         return counts.get("small", 0), counts.get("large", 0)
 
+    @staticmethod
+    def _existing_for_key(existing: Task, request_hash: str) -> tuple[dict, bool]:
+        # Legacy rows have no fingerprint and cannot be checked; accept them.
+        if existing.request_hash is not None and existing.request_hash != request_hash:
+            raise IdempotencyConflict("idempotency key was already used with a different request")
+        return task_dict(existing), False
+
     def create_task(self, prompt: str, sla: str = "standard", priority: int = 5,
                     idempotency_key: str | None = None, fail_once: bool = False) -> tuple[dict, bool]:
+        request_hash = request_fingerprint(prompt, sla, priority, fail_once)
         try:
             with self.lock, self.Session.begin() as session:
                 if idempotency_key is not None:
                     existing = session.scalar(select(Task).where(Task.idempotency_key == idempotency_key))
-                    if existing: return task_dict(existing), False
+                    if existing: return self._existing_for_key(existing, request_hash)
                 small, large = self._depths(session)
                 d = route_task(prompt, sla, small, large)
                 task = Task(id=str(uuid.uuid4()), prompt=prompt, sla=sla, priority=priority,
-                            idempotency_key=idempotency_key, route_tier=d.tier, route_reason=d.reason,
+                            idempotency_key=idempotency_key, request_hash=request_hash, route_tier=d.tier, route_reason=d.reason,
                             difficulty_score=d.difficulty, estimated_cost=d.estimated_cost, fail_once=fail_once)
                 session.add(task)
                 session.add(Event(task_id=task.id, kind="routed", message=f"Routed to {d.tier.upper()}: {d.reason}"))
@@ -191,20 +233,24 @@ class SchedulerStore:
             if idempotency_key is not None:
                 with self.Session() as session:
                     existing = session.scalar(select(Task).where(Task.idempotency_key == idempotency_key))
-                    if existing: return task_dict(existing), False
+                    if existing: return self._existing_for_key(existing, request_hash)
             raise
 
     def claim(self, worker_id: str, tier: str, lease_seconds: float = 15.0) -> dict | None:
         with self.lock, self.Session.begin() as session:
-            claimed_at = utcnow()
-            eligible = or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= claimed_at)
-            stmt = select(Task).where(
+            now = self._now_sql()
+            eligible = or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= now)
+            postgres = self.engine.dialect.name == "postgresql"
+            # PostgreSQL returns its clock with the claimed row: no extra round trip.
+            stmt = select(Task, now) if postgres else select(Task)
+            stmt = stmt.where(
                 Task.status == "queued", Task.route_tier == tier, eligible,
             ).order_by(Task.priority.desc(), Task.created_at.asc()).limit(1)
-            if self.engine.dialect.name == "postgresql":
-                stmt = stmt.with_for_update(skip_locked=True)
-            task = session.scalar(stmt)
-            if not task: return None
+            if postgres:
+                stmt = stmt.with_for_update(skip_locked=True, of=Task)
+            row = session.execute(stmt).first()
+            if not row: return None
+            task, claimed_at = (row[0], as_utc(row[1])) if postgres else (row[0], now)
             if self.engine.dialect.name == "sqlite":
                 claimed = session.execute(
                     update(Task).where(Task.id == task.id, Task.status == "queued", eligible).values(
@@ -236,13 +282,13 @@ class SchedulerStore:
                     Task.worker_id == worker_id,
                     Task.attempt == attempt,
                     Task.status == "running",
-                ).values(lease_until=utcnow() + timedelta(seconds=lease_seconds))
+                ).values(lease_until=self._now_sql() + timedelta(seconds=lease_seconds))
             )
             return renewed.rowcount == 1
 
     def get_expired_tasks(self, now: datetime | None = None) -> list[dict]:
-        cutoff = now or utcnow()
         with self.Session() as session:
+            cutoff = now or self._db_now(session)
             tasks = session.scalars(
                 select(Task).where(
                     Task.status == "running",
@@ -254,9 +300,9 @@ class SchedulerStore:
 
     def requeue_stale_tasks(self, now: datetime | None = None) -> list[str]:
         """Recover expired work without racing a concurrent lease renewal."""
-        cutoff = now or utcnow()
         recovered: list[str] = []
         with self.lock, self.Session.begin() as session:
+            cutoff = now or self._db_now(session)
             stmt = select(Task).where(
                 Task.status == "running",
                 Task.lease_until.is_not(None),
@@ -309,7 +355,7 @@ class SchedulerStore:
             worker.model_tier = tier
             worker.status = status
             worker.current_task_id = task_id
-            worker.last_heartbeat = utcnow()
+            worker.last_heartbeat = self._now_sql()
 
     def mark_worker_offline(self, worker_id: str) -> None:
         with self.Session.begin() as session:
@@ -317,11 +363,11 @@ class SchedulerStore:
             if worker:
                 worker.status = "offline"
                 worker.current_task_id = None
-                worker.last_heartbeat = utcnow()
+                worker.last_heartbeat = self._now_sql()
 
     def list_workers(self, stale_after_seconds: float = 8.0) -> list[dict]:
-        now = utcnow()
         with self.Session() as session:
+            now = self._db_now(session)
             rows = session.scalars(select(Worker).order_by(Worker.id)).all()
             result = []
             for worker in rows:
@@ -341,7 +387,7 @@ class SchedulerStore:
                 update(Task).where(
                     Task.id == task_id, Task.worker_id == worker_id,
                     Task.attempt == attempt, Task.status == "running",
-                ).values(status="succeeded", result=result, finished_at=utcnow(),
+                ).values(status="succeeded", result=result, finished_at=self._now_sql(),
                          lease_until=None, next_attempt_at=None)
                 .execution_options(synchronize_session=False)
             )
@@ -352,7 +398,7 @@ class SchedulerStore:
     def fail_or_retry(self, task_id: str, worker_id: str, attempt: int, error: str) -> str:
         with self.lock, self.Session.begin() as session:
             retryable = Task.attempt < Task.max_attempts
-            failed_at = utcnow()
+            failed_at = self._now_sql()
             delay = retry_delay_seconds(
                 task_id, attempt, self.retry_base_seconds, self.retry_max_seconds
             )
@@ -406,11 +452,13 @@ class SchedulerStore:
         with self.Session() as session:
             by_status = dict(session.execute(select(Task.status, func.count()).group_by(Task.status)).all())
             by_tier = dict(session.execute(select(Task.route_tier, func.count()).group_by(Task.route_tier)).all())
-            spent, retries, recoveries = session.execute(select(
+            spent, recoveries = session.execute(select(
                 func.coalesce(func.sum(Task.estimated_cost), 0.0),
-                func.coalesce(func.sum(case((Task.attempt > 1, Task.attempt - 1), else_=0)), 0),
                 func.coalesce(func.sum(Task.recovery_count), 0),
             )).one()
+            # Count scheduled retries, not extra attempts: attempts consumed by lease
+            # recovery are already reported as recoveries.
+            retries = session.scalar(select(func.count()).where(Event.kind == "retry"))
             # Same definition as task_dict: creation to finish of a task that started.
             avg_latency = session.scalar(select(func.avg(self._elapsed_ms_sql(Task.finished_at, Task.created_at))).where(
                 Task.started_at.is_not(None), Task.finished_at.is_not(None),
