@@ -15,7 +15,7 @@ A multi-worker inference scheduler that routes each request to a small or large 
 
 | What | Result | Conditions |
 | --- | --- | --- |
-| Queue throughput | **135 tasks/s, 0 duplicate claims** across 1,000 tasks | 8 workers, PostgreSQL 16, mock inference, median of 3 runs · [details](docs/BENCHMARKS.md#queue-throughput) |
+| Queue throughput | **139 tasks/s, 0 duplicate claims** across 1,000 tasks | 8 workers, PostgreSQL 16, mock inference, median of 3 runs · [details](docs/BENCHMARKS.md#queue-throughput) |
 | Crash recovery | **20 / 20 killed tasks recovered**, every stale write rejected | Short 200 ms test lease · [details](docs/BENCHMARKS.md#crash-recovery) |
 | Cost-aware routing | **100% of all-Sonnet quality at 35% lower cost** | Claude Haiku 4.5 / Sonnet 5.5, 50 graded cases, one sample each · [details](docs/EVALUATION.md) |
 

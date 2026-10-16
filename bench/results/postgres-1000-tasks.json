@@ -1,8 +1,8 @@
 {
-  "measured_at": "2026-10-05T02:15:35.403769+00:00",
+  "measured_at": "2026-10-16T22:55:25.235075+00:00",
   "database": "postgresql",
   "python": "3.11.0",
-  "platform": "Windows-10-10.0.26200-SP0",
+  "platform": "Windows-10-10.0.26300-SP0",
   "tasks_submitted": 1000,
   "tasks_succeeded": 1000,
   "workers": 8,
@@ -12,26 +12,27 @@
   "execution_mode": "mock inference without provider delay",
   "workload": "burst submission with forced 50/50 tier distribution",
   "worker_completions": [
+    125,
+    125,
+    125,
     124,
     125,
-    125,
-    126,
     126,
     125,
-    125,
-    124
+    125
   ],
-  "duration_seconds": 7.3842,
-  "throughput_tasks_per_second": 135.42,
+  "duration_seconds": 7.1935,
+  "throughput_tasks_per_second": 139.02,
+  "latency_measured_from": "worker release (all tasks pre-submitted)",
   "queue_latency_ms": {
-    "p50": 8226.0,
-    "p95": 13238.7,
-    "p99": 14409.65
+    "p50": 3418.17,
+    "p95": 6715.81,
+    "p99": 7063.22
   },
   "total_latency_ms": {
-    "p50": 8267.0,
-    "p95": 13281.45,
-    "p99": 14438.66
+    "p50": 3446.1,
+    "p95": 6764.49,
+    "p99": 7100.52
   },
   "routing": {
     "small": 500,
