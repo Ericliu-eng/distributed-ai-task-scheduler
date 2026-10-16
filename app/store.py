@@ -163,6 +163,19 @@ class SchedulerStore:
                 if "duplicate column" not in message and "already exists" not in message:
                     raise
 
+    def _db_now(self, session) -> datetime:
+        """Return the database clock so leases never depend on a worker's clock.
+
+        Workers, the API, and the recovery monitor may run on different machines;
+        comparing lease deadlines computed from their local clocks would let skew
+        recover live work early or keep dead work leased. PostgreSQL ``now()`` is
+        the transaction start time, so one transaction sees one consistent instant.
+        SQLite is a single-machine development backend and uses the local clock.
+        """
+        if self.engine.dialect.name == "postgresql":
+            return as_utc(session.scalar(select(func.now())))
+        return utcnow()
+
     def _depths(self, session) -> tuple[int, int]:
         rows = session.execute(select(Task.route_tier, func.count()).where(Task.status == "queued").group_by(Task.route_tier)).all()
         counts = dict(rows)
@@ -179,7 +192,8 @@ class SchedulerStore:
                 d = route_task(prompt, sla, small, large)
                 task = Task(id=str(uuid.uuid4()), prompt=prompt, sla=sla, priority=priority,
                             idempotency_key=idempotency_key, route_tier=d.tier, route_reason=d.reason,
-                            difficulty_score=d.difficulty, estimated_cost=d.estimated_cost, fail_once=fail_once)
+                            difficulty_score=d.difficulty, estimated_cost=d.estimated_cost, fail_once=fail_once,
+                            created_at=self._db_now(session))
                 session.add(task)
                 session.add(Event(task_id=task.id, kind="routed", message=f"Routed to {d.tier.upper()}: {d.reason}"))
                 # Apply defaults and detect uniqueness conflicts before serializing.
@@ -196,7 +210,7 @@ class SchedulerStore:
 
     def claim(self, worker_id: str, tier: str, lease_seconds: float = 15.0) -> dict | None:
         with self.lock, self.Session.begin() as session:
-            claimed_at = utcnow()
+            claimed_at = self._db_now(session)
             eligible = or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= claimed_at)
             stmt = select(Task).where(
                 Task.status == "queued", Task.route_tier == tier, eligible,
@@ -230,19 +244,20 @@ class SchedulerStore:
                     lease_seconds: float = 15.0) -> bool:
         """Extend a lease only if the caller still owns the exact attempt."""
         with self.Session.begin() as session:
+            renewed_at = self._db_now(session)
             renewed = session.execute(
                 update(Task).where(
                     Task.id == task_id,
                     Task.worker_id == worker_id,
                     Task.attempt == attempt,
                     Task.status == "running",
-                ).values(lease_until=utcnow() + timedelta(seconds=lease_seconds))
+                ).values(lease_until=renewed_at + timedelta(seconds=lease_seconds))
             )
             return renewed.rowcount == 1
 
     def get_expired_tasks(self, now: datetime | None = None) -> list[dict]:
-        cutoff = now or utcnow()
         with self.Session() as session:
+            cutoff = now or self._db_now(session)
             tasks = session.scalars(
                 select(Task).where(
                     Task.status == "running",
@@ -254,9 +269,9 @@ class SchedulerStore:
 
     def requeue_stale_tasks(self, now: datetime | None = None) -> list[str]:
         """Recover expired work without racing a concurrent lease renewal."""
-        cutoff = now or utcnow()
         recovered: list[str] = []
         with self.lock, self.Session.begin() as session:
+            cutoff = now or self._db_now(session)
             stmt = select(Task).where(
                 Task.status == "running",
                 Task.lease_until.is_not(None),
@@ -309,7 +324,7 @@ class SchedulerStore:
             worker.model_tier = tier
             worker.status = status
             worker.current_task_id = task_id
-            worker.last_heartbeat = utcnow()
+            worker.last_heartbeat = self._db_now(session)
 
     def mark_worker_offline(self, worker_id: str) -> None:
         with self.Session.begin() as session:
@@ -317,11 +332,11 @@ class SchedulerStore:
             if worker:
                 worker.status = "offline"
                 worker.current_task_id = None
-                worker.last_heartbeat = utcnow()
+                worker.last_heartbeat = self._db_now(session)
 
     def list_workers(self, stale_after_seconds: float = 8.0) -> list[dict]:
-        now = utcnow()
         with self.Session() as session:
+            now = self._db_now(session)
             rows = session.scalars(select(Worker).order_by(Worker.id)).all()
             result = []
             for worker in rows:
@@ -337,11 +352,12 @@ class SchedulerStore:
         with self.lock, self.Session.begin() as session:
             # Ownership must be checked by the write itself: a Python lock only
             # protects this store instance, not recovery/worker processes.
+            finished_at = self._db_now(session)
             changed = session.execute(
                 update(Task).where(
                     Task.id == task_id, Task.worker_id == worker_id,
                     Task.attempt == attempt, Task.status == "running",
-                ).values(status="succeeded", result=result, finished_at=utcnow(),
+                ).values(status="succeeded", result=result, finished_at=finished_at,
                          lease_until=None, next_attempt_at=None)
                 .execution_options(synchronize_session=False)
             )
@@ -352,7 +368,7 @@ class SchedulerStore:
     def fail_or_retry(self, task_id: str, worker_id: str, attempt: int, error: str) -> str:
         with self.lock, self.Session.begin() as session:
             retryable = Task.attempt < Task.max_attempts
-            failed_at = utcnow()
+            failed_at = self._db_now(session)
             delay = retry_delay_seconds(
                 task_id, attempt, self.retry_base_seconds, self.retry_max_seconds
             )
