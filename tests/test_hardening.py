@@ -167,6 +167,33 @@ def test_demo_endpoints_require_demo_mode(monkeypatch):
     assert api.reset_demo()["seeded"] == 5
 
 
+def test_api_rejects_idempotency_key_reuse_with_409(monkeypatch):
+    monkeypatch.setattr(api, "store", make_store())
+    first = api.create_task(api.TaskCreate(prompt="same request", idempotency_key="k1"), Response())
+    response = Response()
+    again = api.create_task(api.TaskCreate(prompt="same request", idempotency_key="k1"), response)
+    assert again["task_id"] == first["task_id"] and response.status_code == 200
+    with pytest.raises(HTTPException) as error:
+        api.create_task(api.TaskCreate(prompt="other request", idempotency_key="k1"), Response())
+    assert error.value.status_code == 409
+
+
+def test_liveness_and_readiness(monkeypatch):
+    monkeypatch.setattr(api, "store", make_store())
+    assert api.healthz() == {"status": "ok"}
+    assert api.readyz() == {"status": "ready"}
+
+    class Unreachable:
+        def connect(self):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(api.store, "engine", Unreachable())
+    assert api.healthz() == {"status": "ok"}
+    with pytest.raises(HTTPException) as error:
+        api.readyz()
+    assert error.value.status_code == 503
+
+
 def test_code_grader_times_out_instead_of_hanging(monkeypatch):
     monkeypatch.setattr(evaluate, "CODE_TIMEOUT_SECONDS", 1)
     case = {case.id: case for case in evaluate.load_cases()}["code-001"]

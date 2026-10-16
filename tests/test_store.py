@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
-from app.store import SchedulerStore, Task
+import pytest
+
+from app.store import IdempotencyConflict, SchedulerStore, Task
 
 def make_store():
     store = SchedulerStore("sqlite:///:memory:")
@@ -10,10 +12,27 @@ def make_store():
 def test_idempotency_returns_same_task():
     store = make_store()
     first, created_first = store.create_task("a valid prompt", idempotency_key="same")
-    second, created_second = store.create_task("a different prompt", idempotency_key="same")
+    second, created_second = store.create_task("a valid prompt", idempotency_key="same")
     assert created_first is True
     assert created_second is False
     assert first["id"] == second["id"]
+
+def test_idempotency_key_reused_with_different_request_conflicts():
+    store = make_store()
+    store.create_task("a valid prompt", idempotency_key="same")
+    for changed in ({"prompt": "a different prompt"}, {"priority": 9}, {"sla": "urgent"}):
+        request = {"prompt": "a valid prompt", "idempotency_key": "same", **changed}
+        with pytest.raises(IdempotencyConflict):
+            store.create_task(**request)
+    assert store.metrics()["total"] == 1
+
+def test_legacy_row_without_fingerprint_still_deduplicates():
+    store = make_store()
+    first, _ = store.create_task("a valid prompt", idempotency_key="legacy")
+    with store.Session.begin() as session:
+        session.get(Task, first["id"]).request_hash = None
+    again, created = store.create_task("a valid prompt", idempotency_key="legacy")
+    assert (again["id"], created) == (first["id"], False)
 
 def test_priority_and_fencing():
     store = make_store()

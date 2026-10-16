@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from app.store import Event, SchedulerStore, Task, as_utc
+from app.store import Event, IdempotencyConflict, SchedulerStore, Task, as_utc
 
 
 POSTGRES_TEST_URL = os.getenv("TEST_DATABASE_URL")
@@ -46,10 +46,11 @@ def concurrent_submissions(url, key):
             futures = [
                 executor.submit(
                     store.create_task,
-                    f"Concurrent submission {index}",
+                    # A client retry resends the same body under the same key.
+                    "Concurrent submission",
                     idempotency_key=key,
                 )
-                for index, store in enumerate(stores)
+                for store in stores
             ]
             return [future.result(timeout=30) for future in futures]
     finally:
@@ -87,7 +88,7 @@ def assert_one_submission(store, key, responses):
         events = session.scalars(select(Event).where(Event.task_id == task_id)).all()
         assert [task.id for task in tasks] == [task_id]
         assert [event.kind for event in events] == ["routed"]
-    repeated, created = store.create_task("Later request with the same key", idempotency_key=key)
+    repeated, created = store.create_task("Concurrent submission", idempotency_key=key)
     assert created is False
     assert_committed_task(repeated, persisted)
 
@@ -141,3 +142,26 @@ def test_postgresql_concurrent_idempotent_submissions():
                 session.execute(delete(Event).where(Event.task_id.in_(ids)))
                 session.execute(delete(Task).where(Task.id.in_(ids)))
         store.engine.dispose()
+
+
+def test_concurrent_conflicting_bodies_create_one_task_and_reject_the_rest(database):
+    url, store = database
+    barrier = threading.Barrier(4)
+    stores = [SynchronizedSubmitStore(url, barrier) for _ in range(4)]
+
+    def submit(index, racer):
+        try:
+            return racer.create_task(f"Conflicting body {index}", idempotency_key="contested")
+        except IdempotencyConflict:
+            return "conflict"
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(stores)) as executor:
+            outcomes = list(executor.map(submit, range(4), stores))
+    finally:
+        for racer in stores:
+            racer.engine.dispose()
+    created = [outcome for outcome in outcomes if outcome != "conflict"]
+    assert len(created) == 1 and created[0][1] is True
+    assert outcomes.count("conflict") == 3
+    assert store.metrics()["total"] == 1

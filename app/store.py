@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 import threading
 import uuid
@@ -8,6 +9,13 @@ from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, c
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.router import TIER_COST, route_task
+
+class IdempotencyConflict(Exception):
+    """An idempotency key was reused with a different request body."""
+
+def request_fingerprint(prompt: str, sla: str, priority: int, fail_once: bool) -> str:
+    """Hash the fields that define a logical task, for idempotency-key reuse checks."""
+    return sha256(json.dumps([prompt, sla, priority, fail_once]).encode()).hexdigest()
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -40,6 +48,8 @@ class Task(Base):
     __tablename__ = "tasks"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    # Fingerprint of the submitted fields; NULL for rows created before it existed.
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     prompt: Mapped[str] = mapped_column(Text)
     sla: Mapped[str] = mapped_column(String(16), default="standard")
     priority: Mapped[int] = mapped_column(Integer, default=5)
@@ -149,6 +159,8 @@ class SchedulerStore:
             statements.append(f"ALTER TABLE tasks ADD COLUMN lease_until {column_type}")
         if "recovery_count" not in existing:
             statements.append("ALTER TABLE tasks ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0")
+        if "request_hash" not in existing:
+            statements.append("ALTER TABLE tasks ADD COLUMN request_hash VARCHAR(64)")
         if "next_attempt_at" not in existing:
             column_type = "TIMESTAMPTZ" if self.engine.dialect.name == "postgresql" else "DATETIME"
             statements.append(f"ALTER TABLE tasks ADD COLUMN next_attempt_at {column_type}")
@@ -181,17 +193,25 @@ class SchedulerStore:
         counts = dict(rows)
         return counts.get("small", 0), counts.get("large", 0)
 
+    @staticmethod
+    def _existing_for_key(existing: Task, request_hash: str) -> tuple[dict, bool]:
+        # Legacy rows have no fingerprint and cannot be checked; accept them.
+        if existing.request_hash is not None and existing.request_hash != request_hash:
+            raise IdempotencyConflict("idempotency key was already used with a different request")
+        return task_dict(existing), False
+
     def create_task(self, prompt: str, sla: str = "standard", priority: int = 5,
                     idempotency_key: str | None = None, fail_once: bool = False) -> tuple[dict, bool]:
+        request_hash = request_fingerprint(prompt, sla, priority, fail_once)
         try:
             with self.lock, self.Session.begin() as session:
                 if idempotency_key is not None:
                     existing = session.scalar(select(Task).where(Task.idempotency_key == idempotency_key))
-                    if existing: return task_dict(existing), False
+                    if existing: return self._existing_for_key(existing, request_hash)
                 small, large = self._depths(session)
                 d = route_task(prompt, sla, small, large)
                 task = Task(id=str(uuid.uuid4()), prompt=prompt, sla=sla, priority=priority,
-                            idempotency_key=idempotency_key, route_tier=d.tier, route_reason=d.reason,
+                            idempotency_key=idempotency_key, request_hash=request_hash, route_tier=d.tier, route_reason=d.reason,
                             difficulty_score=d.difficulty, estimated_cost=d.estimated_cost, fail_once=fail_once,
                             created_at=self._db_now(session))
                 session.add(task)
@@ -205,7 +225,7 @@ class SchedulerStore:
             if idempotency_key is not None:
                 with self.Session() as session:
                     existing = session.scalar(select(Task).where(Task.idempotency_key == idempotency_key))
-                    if existing: return task_dict(existing), False
+                    if existing: return self._existing_for_key(existing, request_hash)
             raise
 
     def claim(self, worker_id: str, tier: str, lease_seconds: float = 15.0) -> dict | None:
