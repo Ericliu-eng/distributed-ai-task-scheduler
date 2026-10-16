@@ -406,11 +406,13 @@ class SchedulerStore:
         with self.Session() as session:
             by_status = dict(session.execute(select(Task.status, func.count()).group_by(Task.status)).all())
             by_tier = dict(session.execute(select(Task.route_tier, func.count()).group_by(Task.route_tier)).all())
-            spent, retries, recoveries = session.execute(select(
+            spent, recoveries = session.execute(select(
                 func.coalesce(func.sum(Task.estimated_cost), 0.0),
-                func.coalesce(func.sum(case((Task.attempt > 1, Task.attempt - 1), else_=0)), 0),
                 func.coalesce(func.sum(Task.recovery_count), 0),
             )).one()
+            # Count scheduled retries, not extra attempts: attempts consumed by lease
+            # recovery are already reported as recoveries.
+            retries = session.scalar(select(func.count()).where(Event.kind == "retry"))
             # Same definition as task_dict: creation to finish of a task that started.
             avg_latency = session.scalar(select(func.avg(self._elapsed_ms_sql(Task.finished_at, Task.created_at))).where(
                 Task.started_at.is_not(None), Task.finished_at.is_not(None),

@@ -25,7 +25,7 @@ A multi-worker inference scheduler that routes each request to a small or large 
 - **Exactly-one claim:** workers take tasks with `SELECT … FOR UPDATE SKIP LOCKED`, ordered by priority.
 - **Leases and recovery:** a claim holds a 15 s lease renewed every 3 s; a monitor requeues tasks whose lease expires.
 - **Fencing:** every write-back must match the current attempt number, so a dead or slow worker cannot overwrite newer work.
-- **Retries and idempotency:** provider failures back off exponentially (1–30 s, jittered, 3 attempts); idempotency keys deduplicate submissions.
+- **Retries and idempotency:** provider failures retry with jittered exponential backoff (0.5–1 s, then 1–2 s, within 3 attempts; capped at 30 s); idempotency keys deduplicate submissions.
 
 More in [docs/DESIGN.md](docs/DESIGN.md): failure semantics, the API, and known limitations.
 
