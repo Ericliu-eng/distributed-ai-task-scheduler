@@ -1,7 +1,14 @@
 from datetime import datetime, timezone
+import os
+
+import pytest
+from sqlalchemy import event
 
 from app.store import SchedulerStore, Task
 from worker.main import WorkerService
+
+
+POSTGRES_TEST_URL = os.getenv("TEST_DATABASE_URL")
 
 
 def make_store():
@@ -36,8 +43,6 @@ def test_worker_retries_transient_failure():
 
 def count_transactions(store):
     """Count database transactions the store begins from now on."""
-    from sqlalchemy import event
-
     began = []
     event.listen(store.engine, "begin", lambda connection: began.append(1))
     return began
@@ -87,3 +92,32 @@ def test_claim_registers_an_unknown_worker():
     assert [(w["id"], w["tier"], w["status"]) for w in store.list_workers()] == [
         ("worker-new", "small", "busy")
     ]
+
+
+@pytest.mark.skipif(
+    not POSTGRES_TEST_URL,
+    reason="set TEST_DATABASE_URL to count PostgreSQL round trips",
+)
+def test_postgresql_task_costs_two_statements():
+    """Claim and write-back are one autocommit statement each: no BEGIN or COMMIT."""
+    store = SchedulerStore(POSTGRES_TEST_URL)
+    store.init()
+    store.reset()
+    store.create_task("first task")
+    store.create_task("second task")
+    worker = WorkerService(store, "worker-small-test", "small", renew_interval=60)
+    try:
+        assert worker.run_once(delay=False) is True
+
+        statements = []
+
+        def record(connection, cursor, statement, *args):
+            # psycopg sends no BEGIN or COMMIT for an autocommit connection.
+            statements.append((statement, connection.connection.dbapi_connection.autocommit))
+
+        event.listen(store.engine, "before_cursor_execute", record)
+        assert worker.run_once(delay=False) is True
+        assert len(statements) == 2
+        assert all(sql.lstrip().startswith("WITH") and autocommit for sql, autocommit in statements)
+    finally:
+        store.engine.dispose()

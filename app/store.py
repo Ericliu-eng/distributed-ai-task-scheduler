@@ -5,7 +5,8 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, case, create_engine, func, inspect, or_, select, text, update
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, case, cast, create_engine, func, insert, inspect, literal, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.router import TIER_COST, route_task
@@ -237,6 +238,8 @@ class SchedulerStore:
             raise
 
     def claim(self, worker_id: str, tier: str, lease_seconds: float = 15.0) -> dict | None:
+        if self.engine.dialect.name == "postgresql":
+            return self._claim_one_statement(worker_id, tier, lease_seconds)
         with self.lock, self.Session.begin() as session:
             now = self._now_sql()
             eligible = or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= now)
@@ -276,6 +279,95 @@ class SchedulerStore:
             # Returned with the claim so the worker needs no extra lookup.
             claimed_task["fail_once"] = task.fail_once
             return claimed_task
+
+    def _autocommit(self):
+        """A connection for single-statement writes, which are atomic on their own.
+
+        PostgreSQL hot-path writes are one statement each, so they skip the
+        separate BEGIN and COMMIT round trips. Built from the current engine so
+        engine options (such as a test schema map) still apply.
+        """
+        return self.engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+
+    def _claim_one_statement(self, worker_id: str, tier: str,
+                             lease_seconds: float) -> dict | None:
+        """Claim, record the event, and mark the worker busy in one statement.
+
+        Data-modifying CTEs pick the next task with SKIP LOCKED, claim it, insert
+        its event, and upsert the worker heartbeat. When nothing is claimed, the
+        dependent inserts see no rows and write nothing.
+        """
+        now = func.now()
+        picked = (
+            select(Task.id)
+            .where(Task.status == "queued", Task.route_tier == tier,
+                   or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= now))
+            .order_by(Task.priority.desc(), Task.created_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+            .cte("picked")
+        )
+        claimed = (
+            update(Task)
+            .where(Task.id == picked.c.id)
+            .values(status="running", worker_id=worker_id, started_at=now,
+                    lease_until=now + timedelta(seconds=lease_seconds),
+                    next_attempt_at=None, attempt=Task.attempt + 1, error=None)
+            .returning(*Task.__table__.c)
+            .cte("claimed")
+        )
+        claim_event = insert(Event).from_select(
+            ["task_id", "kind", "message", "created_at"],
+            select(claimed.c.id, literal("claimed"),
+                   literal(f"{worker_id} claimed attempt ") + cast(claimed.c.attempt, String),
+                   now),
+        ).cte("claim_event")
+        upsert = pg_insert(Worker).from_select(
+            ["id", "model_tier", "status", "current_task_id", "last_heartbeat"],
+            select(literal(worker_id), literal(tier), literal("busy"), claimed.c.id, now),
+        )
+        heartbeat = upsert.on_conflict_do_update(
+            index_elements=[Worker.id],
+            set_={"status": upsert.excluded.status,
+                  "current_task_id": upsert.excluded.current_task_id,
+                  "last_heartbeat": upsert.excluded.last_heartbeat},
+        ).cte("heartbeat")
+        statement = select(claimed).add_cte(claim_event).add_cte(heartbeat)
+        with self.lock, self._autocommit() as connection:
+            row = connection.execute(statement).mappings().first()
+        if row is None:
+            return None
+        claimed_task = task_dict(Task(**row))
+        claimed_task["fail_once"] = row["fail_once"]
+        return claimed_task
+
+    def _finish_one_statement(self, task_id: str, worker_id: str, attempt: int,
+                              result: str) -> bool:
+        """Fenced completion, its event, and the idle heartbeat in one statement."""
+        now = func.now()
+        done = (
+            update(Task)
+            .where(Task.id == task_id, Task.worker_id == worker_id,
+                   Task.attempt == attempt, Task.status == "running")
+            .values(status="succeeded", result=result, finished_at=now,
+                    lease_until=None, next_attempt_at=None)
+            .returning(Task.id)
+            .cte("done")
+        )
+        finish_event = insert(Event).from_select(
+            ["task_id", "kind", "message", "created_at"],
+            select(done.c.id, literal("succeeded"),
+                   literal(f"{worker_id} completed the task"), now),
+        ).cte("finish_event")
+        # The worker is idle again whether or not its write was accepted.
+        heartbeat = (
+            update(Worker).where(Worker.id == worker_id)
+            .values(status="idle", current_task_id=None, last_heartbeat=now)
+            .cte("heartbeat")
+        )
+        statement = select(func.count()).select_from(done).add_cte(finish_event).add_cte(heartbeat)
+        with self.lock, self._autocommit() as connection:
+            return connection.execute(statement).scalar_one() == 1
 
     def renew_lease(self, task_id: str, worker_id: str, attempt: int,
                     lease_seconds: float = 15.0) -> bool:
@@ -397,6 +489,8 @@ class SchedulerStore:
             return result
 
     def finish(self, task_id: str, worker_id: str, attempt: int, result: str) -> bool:
+        if self.engine.dialect.name == "postgresql":
+            return self._finish_one_statement(task_id, worker_id, attempt, result)
         with self.lock, self.Session.begin() as session:
             # Ownership must be checked by the write itself: a Python lock only
             # protects this store instance, not recovery/worker processes.
