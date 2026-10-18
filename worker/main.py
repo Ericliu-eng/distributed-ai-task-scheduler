@@ -32,6 +32,11 @@ class WorkerService:
         self.execute_fn = execute_fn
         self.stop_event = threading.Event()
         self._last_idle_heartbeat: float | None = None
+        # One long-lived renewal thread serves whichever lease is held:
+        # (task_id, attempt, monotonic time the next renewal is due).
+        self._lease = threading.Condition()
+        self._held: tuple[str, int, float] | None = None
+        self._renewer: threading.Thread | None = None
 
     def stop(self, *_):
         self.stop_event.set()
@@ -49,13 +54,7 @@ class WorkerService:
         if task is None:
             return False
         log.info("claimed task=%s attempt=%s tier=%s", task["id"], task["attempt"], self.tier)
-        renewal_stop = threading.Event()
-        renewal_thread = threading.Thread(
-            target=self._renew_while_running,
-            args=(task["id"], task["attempt"], renewal_stop),
-            daemon=True,
-        )
-        renewal_thread.start()
+        self._hold_lease(task["id"], task["attempt"])
         # Claim, finish, and fail_or_retry record this worker's heartbeat in the
         # same transaction, so a task costs two transactions instead of five.
         wrote_back = False
@@ -76,25 +75,58 @@ class WorkerService:
             wrote_back = True
             log.warning("task=%s failed outcome=%s error=%s", task["id"], outcome, exc)
         finally:
-            renewal_stop.set()
-            renewal_thread.join(timeout=self.renew_interval + 1)
+            self._release_lease()
             if wrote_back:
                 self._last_idle_heartbeat = time.monotonic()
             else:
                 self._idle_heartbeat(force=True)
         return True
 
-    def _renew_while_running(self, task_id: str, attempt: int,
-                             renewal_stop: threading.Event) -> None:
-        while not renewal_stop.wait(self.renew_interval):
-            renewed = self.store.renew_lease(
-                task_id, self.worker_id, attempt, self.lease_seconds
-            )
-            if not renewed:
+    def _hold_lease(self, task_id: str, attempt: int) -> None:
+        with self._lease:
+            self._held = (task_id, attempt, time.monotonic() + self.renew_interval)
+            if self._renewer is None:
+                self._renewer = threading.Thread(target=self._renewal_loop, daemon=True)
+                self._renewer.start()
+            self._lease.notify()
+
+    def _release_lease(self) -> None:
+        with self._lease:
+            self._held = None
+
+    def _renewal_loop(self) -> None:
+        """Renew the held lease every ``renew_interval`` until the worker stops.
+
+        A renewal may race the write-back. That is safe: renew_lease is fenced on
+        the running attempt and records the busy heartbeat in the same
+        transaction, so a renewal that lands after the write-back changes nothing.
+        """
+        while not self.stop_event.is_set():
+            with self._lease:
+                if self._held is None:
+                    self._lease.wait(timeout=1.0)
+                    continue
+                task_id, attempt, due = self._held
+                remaining = due - time.monotonic()
+                if remaining > 0:
+                    self._lease.wait(timeout=remaining)
+                    continue
+                self._held = (task_id, attempt, due + self.renew_interval)
+            try:
+                renewed = self.store.renew_lease(task_id, self.worker_id, attempt,
+                                                 self.lease_seconds)
+            except Exception:
+                log.exception("lease renewal failed task=%s attempt=%s", task_id, attempt)
+                continue
+            with self._lease:
+                still_held = self._held is not None and self._held[:2] == (task_id, attempt)
+                if not renewed and still_held:
+                    # Recovered by the monitor: stop renewing; the write-back will be fenced.
+                    self._held = None
+            if not renewed and still_held:
                 log.warning("lease renewal rejected task=%s attempt=%s", task_id, attempt)
-                return
-            self.store.heartbeat(self.worker_id, self.tier, "busy", task_id)
-            log.debug("renewed lease task=%s attempt=%s", task_id, attempt)
+            elif renewed:
+                log.debug("renewed lease task=%s attempt=%s", task_id, attempt)
 
     def run_forever(self):
         self.store.init()

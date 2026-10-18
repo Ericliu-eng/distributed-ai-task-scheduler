@@ -381,7 +381,12 @@ class SchedulerStore:
                     Task.status == "running",
                 ).values(lease_until=self._now_sql() + timedelta(seconds=lease_seconds))
             )
-            return renewed.rowcount == 1
+            if renewed.rowcount != 1:
+                return False
+            # Same transaction as the fenced renewal: a renewal that loses the race
+            # with the write-back cannot mark the worker busy again.
+            self._set_worker_state(session, worker_id, "busy", task_id)
+            return True
 
     def get_expired_tasks(self, now: datetime | None = None) -> list[dict]:
         with self.Session() as session:

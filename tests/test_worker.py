@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 import os
+import threading
+import time
 
 import pytest
 from sqlalchemy import event
@@ -121,3 +123,40 @@ def test_postgresql_task_costs_two_statements():
         assert all(sql.lstrip().startswith("WITH") and autocommit for sql, autocommit in statements)
     finally:
         store.engine.dispose()
+
+
+def test_one_renewal_thread_keeps_long_tasks_leased(tmp_path):
+    store = SchedulerStore(f"sqlite:///{(tmp_path / 'renew.db').as_posix()}")
+    store.init()
+    tasks = [store.create_task(f"long task {index}")[0] for index in range(3)]
+    leases = {}
+
+    def slow_execute(prompt, tier, delay=True):
+        claimed = next(task for task in tasks if task["prompt"] == prompt)
+        first = store.get_task(claimed["id"])["lease_until"]
+        time.sleep(0.35)  # several renewal intervals
+        leases[claimed["id"]] = (first, store.get_task(claimed["id"])["lease_until"])
+        return "done"
+
+    worker = WorkerService(store, "worker-small-test", "small",
+                           lease_seconds=5, renew_interval=0.1, execute_fn=slow_execute)
+    threads_before = threading.active_count()
+    for _ in tasks:
+        assert worker.run_once(delay=False) is True
+    worker.stop()
+
+    assert all(later > first for first, later in leases.values())
+    assert all(store.get_task(task["id"])["status"] == "succeeded" for task in tasks)
+    # One long-lived renewer for the worker, not one thread per task.
+    assert threading.active_count() <= threads_before + 1
+
+
+def test_renewal_after_write_back_does_not_mark_worker_busy():
+    store = make_store()
+    task, _ = store.create_task("finished first")
+    claimed = store.claim("worker-small-test", "small")
+    assert store.finish(task["id"], "worker-small-test", claimed["attempt"], "ok")
+
+    assert store.renew_lease(task["id"], "worker-small-test", claimed["attempt"], 15) is False
+    worker = store.list_workers()[0]
+    assert (worker["status"], worker["task_id"]) == ("idle", None)
