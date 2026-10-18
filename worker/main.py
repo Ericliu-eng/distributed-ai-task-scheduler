@@ -48,7 +48,6 @@ class WorkerService:
         task = self.store.claim(self.worker_id, self.tier, self.lease_seconds)
         if task is None:
             return False
-        self.store.heartbeat(self.worker_id, self.tier, "busy", task["id"])
         log.info("claimed task=%s attempt=%s tier=%s", task["id"], task["attempt"], self.tier)
         renewal_stop = threading.Event()
         renewal_thread = threading.Thread(
@@ -57,24 +56,32 @@ class WorkerService:
             daemon=True,
         )
         renewal_thread.start()
+        # Claim, finish, and fail_or_retry record this worker's heartbeat in the
+        # same transaction, so a task costs two transactions instead of five.
+        wrote_back = False
         try:
-            if self.store.should_fail(task["id"], task["attempt"]):
+            if task.get("fail_once") and task["attempt"] == 1:
                 if delay:
                     time.sleep(0.4)
                 raise RuntimeError("Simulated provider HTTP 503")
             result = self.execute_fn(task["prompt"], self.tier, delay=delay)
             accepted = self.store.finish(task["id"], self.worker_id, task["attempt"], result)
+            wrote_back = True
             if accepted:
                 log.info("completed task=%s", task["id"])
             else:
                 log.warning("fencing rejected task=%s attempt=%s", task["id"], task["attempt"])
         except Exception as exc:
             outcome = self.store.fail_or_retry(task["id"], self.worker_id, task["attempt"], str(exc))
+            wrote_back = True
             log.warning("task=%s failed outcome=%s error=%s", task["id"], outcome, exc)
         finally:
             renewal_stop.set()
             renewal_thread.join(timeout=self.renew_interval + 1)
-            self._idle_heartbeat(force=True)
+            if wrote_back:
+                self._last_idle_heartbeat = time.monotonic()
+            else:
+                self._idle_heartbeat(force=True)
         return True
 
     def _renew_while_running(self, task_id: str, attempt: int,

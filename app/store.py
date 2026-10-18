@@ -270,7 +270,12 @@ class SchedulerStore:
                 task.attempt += 1
                 task.error = None
             session.add(Event(task_id=task.id, kind="claimed", message=f"{worker_id} claimed attempt {task.attempt}"))
-            return task_dict(task)
+            # The busy heartbeat rides in the claim transaction instead of its own.
+            self._set_worker_state(session, worker_id, "busy", task.id, tier)
+            claimed_task = task_dict(task)
+            # Returned with the claim so the worker needs no extra lookup.
+            claimed_task["fail_once"] = task.fail_once
+            return claimed_task
 
     def renew_lease(self, task_id: str, worker_id: str, attempt: int,
                     lease_seconds: float = 15.0) -> bool:
@@ -345,6 +350,18 @@ class SchedulerStore:
                     session.add(Event(task_id=task.id, kind=event_kind, message=message))
         return recovered
 
+    def _set_worker_state(self, session, worker_id: str, status: str,
+                          task_id: str | None, tier: str | None = None) -> None:
+        """Record a worker heartbeat inside the caller's transaction."""
+        updated = session.execute(
+            update(Worker).where(Worker.id == worker_id).values(
+                status=status, current_task_id=task_id, last_heartbeat=self._now_sql(),
+            ).execution_options(synchronize_session=False)
+        )
+        if updated.rowcount == 0 and tier is not None:
+            session.add(Worker(id=worker_id, model_tier=tier, status=status,
+                               current_task_id=task_id, last_heartbeat=self._now_sql()))
+
     def heartbeat(self, worker_id: str, tier: str, status: str = "idle",
                   task_id: str | None = None) -> None:
         with self.Session.begin() as session:
@@ -391,6 +408,8 @@ class SchedulerStore:
                          lease_until=None, next_attempt_at=None)
                 .execution_options(synchronize_session=False)
             )
+            # The worker is idle again whether or not its write was accepted.
+            self._set_worker_state(session, worker_id, "idle", None)
             if changed.rowcount != 1: return False
             session.add(Event(task_id=task_id, kind="succeeded", message=f"{worker_id} completed the task"))
             return True
@@ -414,6 +433,7 @@ class SchedulerStore:
                     finished_at=case((retryable, None), else_=failed_at),
                 ).execution_options(synchronize_session=False)
             )
+            self._set_worker_state(session, worker_id, "idle", None)
             if changed.rowcount != 1: return "fenced"
             # The UPDATE holds the row's write lock until this transaction commits.
             status = session.scalar(select(Task.status).where(Task.id == task_id))
@@ -422,11 +442,6 @@ class SchedulerStore:
                        else f"Failed after {attempt} attempts")
             session.add(Event(task_id=task_id, kind=kind, message=message))
             return status
-
-    def should_fail(self, task_id: str, attempt: int) -> bool:
-        with self.Session() as session:
-            task = session.get(Task, task_id)
-            return bool(task and task.fail_once and attempt == 1)
 
     def list_tasks(self, limit: int = 100) -> list[dict]:
         with self.Session() as session:
