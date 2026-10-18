@@ -19,7 +19,7 @@ MAX_ERROR_BACKOFF_SECONDS = 10.0
 class WorkerService:
     def __init__(self, store: SchedulerStore, worker_id: str, tier: str,
                  poll_interval: float = 0.25, lease_seconds: float = 15.0,
-                 renew_interval: float = 3.0):
+                 renew_interval: float = 3.0, execute_fn=execute):
         if tier not in {"small", "large"}:
             raise ValueError("MODEL_TIER must be 'small' or 'large'")
         self.store = store
@@ -28,6 +28,8 @@ class WorkerService:
         self.poll_interval = poll_interval
         self.lease_seconds = lease_seconds
         self.renew_interval = renew_interval
+        # Injectable so benchmarks can simulate provider time without patching.
+        self.execute_fn = execute_fn
         self.stop_event = threading.Event()
         self._last_idle_heartbeat: float | None = None
 
@@ -60,7 +62,7 @@ class WorkerService:
                 if delay:
                     time.sleep(0.4)
                 raise RuntimeError("Simulated provider HTTP 503")
-            result = execute(task["prompt"], self.tier, delay=delay)
+            result = self.execute_fn(task["prompt"], self.tier, delay=delay)
             accepted = self.store.finish(task["id"], self.worker_id, task["attempt"], result)
             if accepted:
                 log.info("completed task=%s", task["id"])
