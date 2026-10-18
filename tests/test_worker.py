@@ -160,3 +160,13 @@ def test_renewal_after_write_back_does_not_mark_worker_busy():
     assert store.renew_lease(task["id"], "worker-small-test", claimed["attempt"], 15) is False
     worker = store.list_workers()[0]
     assert (worker["status"], worker["task_id"]) == ("idle", None)
+
+
+def test_single_statement_claim_and_finish_are_cacheable():
+    """An uncacheable statement is recompiled on every call: ~3 ms of client CPU per task.
+
+    SQLAlchemy returns no cache key for constructs it cannot cache, such as the
+    PostgreSQL-specific INSERT ... ON CONFLICT.
+    """
+    assert SchedulerStore._claim_statement()._generate_cache_key() is not None
+    assert SchedulerStore._finish_statement()._generate_cache_key() is not None
