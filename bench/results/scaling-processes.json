@@ -1,0 +1,221 @@
+{
+  "measured_at": "2026-10-18T04:36:20.406351+00:00",
+  "python": "3.11.0",
+  "platform": "Windows-10-10.0.26300-SP0",
+  "worker_mode": "one operating-system process per worker, each with its own connection pool",
+  "tasks_per_run": 1000,
+  "repeats": 3,
+  "method": "each cell is the median of its runs; every run resets the database, pre-submits all tasks, and times from worker release to the last completion",
+  "cells": [
+    {
+      "workers": 1,
+      "work_ms": 0.0,
+      "throughput_tasks_per_second": 51.76,
+      "throughput_runs": [
+        48.35,
+        53.82,
+        51.76
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 10107.03,
+        "p95": 18255.01,
+        "p99": 19072.41
+      },
+      "worker_completions": [
+        1000
+      ],
+      "scaling_efficiency_pct": 100.0
+    },
+    {
+      "workers": 4,
+      "work_ms": 0.0,
+      "throughput_tasks_per_second": 189.91,
+      "throughput_runs": [
+        175.85,
+        189.91,
+        198.36
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 2752.14,
+        "p95": 5007.63,
+        "p99": 5199.14
+      },
+      "worker_completions": [
+        249,
+        250,
+        251,
+        250
+      ],
+      "scaling_efficiency_pct": 91.7
+    },
+    {
+      "workers": 8,
+      "work_ms": 0.0,
+      "throughput_tasks_per_second": 312.86,
+      "throughput_runs": [
+        323.84,
+        304.14,
+        312.86
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 1616.68,
+        "p95": 3025.66,
+        "p99": 3144.17
+      },
+      "worker_completions": [
+        125,
+        125,
+        125,
+        125,
+        125,
+        125,
+        125,
+        125
+      ],
+      "scaling_efficiency_pct": 75.6
+    },
+    {
+      "workers": 16,
+      "work_ms": 0.0,
+      "throughput_tasks_per_second": 500.8,
+      "throughput_runs": [
+        500.8,
+        518.67,
+        474.6
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 991.4,
+        "p95": 1871.05,
+        "p99": 1939.75
+      },
+      "worker_completions": [
+        62,
+        63,
+        62,
+        63,
+        63,
+        62,
+        63,
+        63,
+        63,
+        62,
+        63,
+        63,
+        62,
+        62,
+        62,
+        62
+      ],
+      "scaling_efficiency_pct": 60.5
+    },
+    {
+      "workers": 1,
+      "work_ms": 20.0,
+      "throughput_tasks_per_second": 23.31,
+      "throughput_runs": [
+        23.81,
+        22.81,
+        23.31
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 20542.63,
+        "p95": 40670.04,
+        "p99": 42400.83
+      },
+      "worker_completions": [
+        1000
+      ],
+      "scaling_efficiency_pct": 100.0
+    },
+    {
+      "workers": 4,
+      "work_ms": 20.0,
+      "throughput_tasks_per_second": 94.17,
+      "throughput_runs": [
+        93.2,
+        96.45,
+        94.17
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 5267.25,
+        "p95": 10062.64,
+        "p99": 10487.16
+      },
+      "worker_completions": [
+        250,
+        250,
+        250,
+        250
+      ],
+      "scaling_efficiency_pct": 101.0
+    },
+    {
+      "workers": 8,
+      "work_ms": 20.0,
+      "throughput_tasks_per_second": 177.22,
+      "throughput_runs": [
+        173.37,
+        177.83,
+        177.22
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 2802.03,
+        "p95": 5316.87,
+        "p99": 5541.92
+      },
+      "worker_completions": [
+        125,
+        125,
+        125,
+        125,
+        125,
+        125,
+        125,
+        125
+      ],
+      "scaling_efficiency_pct": 95.0
+    },
+    {
+      "workers": 16,
+      "work_ms": 20.0,
+      "throughput_tasks_per_second": 328.03,
+      "throughput_runs": [
+        313.63,
+        333.29,
+        328.03
+      ],
+      "duplicate_claims": 0,
+      "queue_latency_ms": {
+        "p50": 1505.79,
+        "p95": 2848.32,
+        "p99": 2977.83
+      },
+      "worker_completions": [
+        63,
+        63,
+        61,
+        62,
+        63,
+        63,
+        62,
+        62,
+        63,
+        62,
+        62,
+        63,
+        63,
+        62,
+        63,
+        63
+      ],
+      "scaling_efficiency_pct": 88.0
+    }
+  ]
+}

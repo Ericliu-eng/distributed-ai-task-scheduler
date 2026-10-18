@@ -35,6 +35,41 @@ This is the median of three runs (125.0, 139.0, and 139.9 tasks/s, measured 2026
 
 For contrast, the same 1,000-task workload on SQLite also had zero duplicate claims but reached only about 60 tasks/s with very uneven work per worker, because SQLite serializes writers behind one database lock.
 
+## Scaling with worker count
+
+Throughput is flat past four workers when workers are threads, but keeps rising when each worker is its own process. The plateau comes from the benchmark client, not from PostgreSQL. Run the matrix against a disposable database:
+
+```bash
+BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_benchmark   python -m bench.scaling --worker-mode processes --allow-reset --output scaling.json
+```
+
+Each cell is the median of three 1,000-task runs, measured on 2026-10-16 with PostgreSQL 16 in Docker on a 20-core Windows 11 machine. Every run had zero duplicate claims. Efficiency is throughput divided by single-worker throughput times the worker count.
+
+| Workers | Threads, 0 ms | Processes, 0 ms | Threads, 20 ms | Processes, 20 ms |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 49 tasks/s (100%) | 52 tasks/s (100%) | 23 tasks/s (100%) | 23 tasks/s (100%) |
+| 4 | 146 (74%) | 190 (92%) | 80 (86%) | 94 (101%) |
+| 8 | 149 (38%) | 313 (76%) | 117 (63%) | 177 (95%) |
+| 16 | 135 (17%) | 501 (61%) | 131 (35%) | 328 (88%) |
+
+The 0 ms columns measure pure scheduling overhead; the 20 ms columns add a fixed simulated provider call. Raw results are in [`bench/results/scaling-threads.json`](../bench/results/scaling-threads.json) and [`bench/results/scaling-processes.json`](../bench/results/scaling-processes.json).
+
+### Where the time goes
+
+`python -m bench.profile_db` samples `pg_stat_activity` during a run and reads `pg_stat_statements`; it needs PostgreSQL started with `shared_preload_libraries=pg_stat_statements`.
+
+| Run | Average backends executing SQL | Samples waiting for the client |
+| --- | ---: | ---: |
+| 1 worker | 0.22 of 1 | 87% |
+| 16 threads | 0.39 of 16 | 96% |
+| 16 processes | 0.96 of 16 | 82% |
+
+- **The database is mostly idle.** Its connections spend most of their time waiting for the next client statement, often inside an open transaction. Lock waits never appear; the only server-side wait of note is the WAL flush on commit.
+- **Each task costs five transactions and five commits.** These are the claim, a busy heartbeat, a `should_fail` lookup, the result write-back, and an idle heartbeat. That adds up to about eleven round trips. A single worker therefore spends about 20 ms of scheduling overhead per task, which is longer than the 20 ms simulated provider call.
+- **Threads share one interpreter.** With 16 threads the database executes SQL only 2–4% of the time. Transactions stay open while a thread waits for the GIL, so throughput tops out near 150 tasks/s however many threads run. Compose runs every worker as a separate container, so the process columns describe deployment.
+
+The next step is to cut per-task round trips and commits, then rerun this matrix for a before/after comparison.
+
 ## Crash recovery
 
 Run repeated worker-crash trials against a disposable SQLite database:
