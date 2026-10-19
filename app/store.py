@@ -9,6 +9,7 @@ from hashlib import sha256
 from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Interval, String, Text, bindparam, case, cast, create_engine, func, insert, inspect, literal, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from app.dag import DagError, topological_order
 from app.router import TIER_COST, route_task
 
 class IdempotencyConflict(Exception):
@@ -58,6 +59,8 @@ class Task(Base):
     route_reason: Mapped[str] = mapped_column(Text)
     difficulty_score: Mapped[float] = mapped_column(Float)
     estimated_cost: Mapped[float] = mapped_column(Float)
+    # queued -> running -> succeeded | failed; workflow nodes start "blocked"
+    # until every dependency succeeds. Claims only take "queued" rows.
     status: Mapped[str] = mapped_column(String(16), default="queued")
     worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt: Mapped[int] = mapped_column(Integer, default=0)
@@ -71,13 +74,35 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set only for workflow nodes; standalone tasks leave both NULL.
+    workflow_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    node_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         # Claim path: WHERE status/route_tier ORDER BY priority DESC, created_at.
         Index("ix_tasks_claim", "status", "route_tier", "priority", "created_at"),
         # Recovery scan: WHERE status = 'running' AND lease_until < now.
         Index("ix_tasks_lease", "status", "lease_until"),
+        # One task per node key in a workflow; NULLs (standalone tasks) never collide.
+        Index("ux_tasks_workflow_node", "workflow_id", "node_key", unique=True),
     )
+
+class Workflow(Base):
+    __tablename__ = "workflows"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class TaskDependency(Base):
+    """An edge: ``task_id`` may run only after ``depends_on_task_id`` succeeds."""
+    __tablename__ = "task_dependencies"
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    depends_on_task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+
+    # Unlocking walks edges from a finished task to the tasks that wait on it.
+    __table_args__ = (Index("ix_task_dependencies_upstream", "depends_on_task_id"),)
 
 class Event(Base):
     __tablename__ = "events"
@@ -110,7 +135,8 @@ def task_dict(task: Task) -> dict:
             "next_attempt_at": iso(task.next_attempt_at),
             "recovery_count": task.recovery_count, "result": task.result, "error": task.error,
             "created_at": iso(task.created_at), "started_at": iso(task.started_at),
-            "finished_at": iso(task.finished_at), "queue_ms": queue_ms, "run_ms": run_ms}
+            "finished_at": iso(task.finished_at), "queue_ms": queue_ms, "run_ms": run_ms,
+            "workflow_id": task.workflow_id, "node_key": task.node_key}
 
 class SchedulerStore:
     def __init__(self, database_url: str | None = None,
@@ -162,6 +188,10 @@ class SchedulerStore:
             statements.append("ALTER TABLE tasks ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0")
         if "request_hash" not in existing:
             statements.append("ALTER TABLE tasks ADD COLUMN request_hash VARCHAR(64)")
+        if "workflow_id" not in existing:
+            statements.append("ALTER TABLE tasks ADD COLUMN workflow_id VARCHAR(36)")
+        if "node_key" not in existing:
+            statements.append("ALTER TABLE tasks ADD COLUMN node_key VARCHAR(64)")
         if "next_attempt_at" not in existing:
             column_type = "TIMESTAMPTZ" if self.engine.dialect.name == "postgresql" else "DATETIME"
             statements.append(f"ALTER TABLE tasks ADD COLUMN next_attempt_at {column_type}")
@@ -571,6 +601,74 @@ class SchedulerStore:
         with self.Session() as session:
             return [task_dict(t) for t in session.scalars(select(Task).order_by(Task.created_at.desc()).limit(limit)).all()]
 
+    def create_workflow(self, name: str, nodes: list[dict]) -> dict:
+        """Write a workflow, its tasks, and its edges in one transaction.
+
+        Each node is ``{"key", "prompt", "depends_on", "sla", "priority"}``. The
+        graph is validated first (raising DagError), so nothing is written for
+        an invalid workflow. Nodes without dependencies start queued; the rest
+        start blocked. Every node is routed at submission like a standalone task.
+        """
+        keys = [node["key"] for node in nodes]
+        # A dict would silently merge repeated keys, so check before building one.
+        duplicates = sorted({key for key in keys if keys.count(key) > 1})
+        if duplicates:
+            raise DagError("duplicate_key", f"node key {duplicates[0]!r} is used twice", duplicates)
+        order = topological_order({node["key"]: list(node.get("depends_on", [])) for node in nodes})
+        by_key = {node["key"]: node for node in nodes}
+        workflow_id = str(uuid.uuid4())
+        task_ids = {key: str(uuid.uuid4()) for key in order}
+        with self.lock, self.Session.begin() as session:
+            session.add(Workflow(id=workflow_id, name=name))
+            small, large = self._depths(session)
+            for key in order:
+                node = by_key[key]
+                needs = list(node.get("depends_on", []))
+                decision = route_task(node["prompt"], node.get("sla", "standard"), small, large)
+                status = "blocked" if needs else "queued"
+                # Later nodes see the queue depth this workflow has already added.
+                if status == "queued":
+                    small, large = (small + 1, large) if decision.tier == "small" else (small, large + 1)
+                session.add(Task(
+                    id=task_ids[key], workflow_id=workflow_id, node_key=key,
+                    prompt=node["prompt"], sla=node.get("sla", "standard"),
+                    priority=node.get("priority", 5), status=status,
+                    route_tier=decision.tier, route_reason=decision.reason,
+                    difficulty_score=decision.difficulty, estimated_cost=decision.estimated_cost,
+                    request_hash=request_fingerprint(node["prompt"], node.get("sla", "standard"),
+                                                     node.get("priority", 5), False),
+                ))
+                session.add_all(TaskDependency(task_id=task_ids[key], depends_on_task_id=task_ids[need])
+                                for need in needs)
+                session.add(Event(task_id=task_ids[key], kind="routed",
+                                  message=f"{key}: routed to {decision.tier.upper()}: {decision.reason}"))
+            session.flush()
+        return self.get_workflow(workflow_id)
+
+    def get_workflow(self, workflow_id: str) -> dict | None:
+        """A workflow and its nodes in dependency order, each with its upstream keys."""
+        with self.Session() as session:
+            workflow = session.get(Workflow, workflow_id)
+            if workflow is None:
+                return None
+            tasks = session.scalars(select(Task).where(Task.workflow_id == workflow_id)).all()
+            key_of = {task.id: task.node_key for task in tasks}
+            edges = session.execute(
+                select(TaskDependency.task_id, TaskDependency.depends_on_task_id)
+                .where(TaskDependency.task_id.in_(list(key_of)))
+            ).all()
+        needs = {key: [] for key in key_of.values()}
+        for task_id, upstream_id in edges:
+            needs[key_of[task_id]].append(key_of[upstream_id])
+        nodes = {task.node_key: task for task in tasks}
+        order = topological_order({key: sorted(needs[key]) for key in sorted(needs)})
+        iso = lambda value: value.isoformat() if value else None
+        return {
+            "id": workflow.id, "name": workflow.name, "status": workflow.status,
+            "created_at": iso(workflow.created_at), "finished_at": iso(workflow.finished_at),
+            "nodes": [{**task_dict(nodes[key]), "depends_on": sorted(needs[key])} for key in order],
+        }
+
     def get_task(self, task_id: str) -> dict | None:
         with self.Session() as session:
             task = session.get(Task, task_id)
@@ -619,4 +717,6 @@ class SchedulerStore:
     def reset(self):
         with self.lock, self.Session.begin() as session:
             session.query(Event).delete()
+            session.query(TaskDependency).delete()
             session.query(Task).delete()
+            session.query(Workflow).delete()

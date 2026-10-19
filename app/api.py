@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.dag import MAX_NODES, DagError
 from app.store import IdempotencyConflict, SchedulerStore
 from app.benchmarks import load_result
 from app.telemetry import timeseries
@@ -37,6 +38,17 @@ class TaskCreate(BaseModel):
     priority: int = Field(default=5, ge=1, le=10)
     idempotency_key: str | None = Field(default=None, max_length=160)
     fail_once: bool = False
+
+class WorkflowNode(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    prompt: str = Field(min_length=3, max_length=10000)
+    depends_on: list[str] = Field(default_factory=list, max_length=MAX_NODES)
+    sla: str = Field(default="standard", pattern="^(standard|urgent)$")
+    priority: int = Field(default=5, ge=1, le=10)
+
+class WorkflowCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    nodes: list[WorkflowNode] = Field(min_length=1, max_length=MAX_NODES)
 
 @app.get("/", include_in_schema=False)
 def dashboard():
@@ -75,6 +87,21 @@ def create_task(payload: TaskCreate, response: Response):
         response.status_code = 200
     return {"task_id": task["id"], "status": task["status"], "route_tier": task["route_tier"],
             "route_reason": task["route_reason"], "created": created}
+
+@app.post("/workflows", status_code=201)
+def create_workflow(payload: WorkflowCreate):
+    """Submit a DAG of tasks; nodes run only after every dependency succeeds."""
+    try:
+        return store.create_workflow(payload.name, [node.model_dump() for node in payload.nodes])
+    except DagError as exc:
+        raise HTTPException(422, {"problem": exc.problem, "message": str(exc), "nodes": exc.nodes}) from exc
+
+@app.get("/workflows/{workflow_id}")
+def get_workflow(workflow_id: str):
+    workflow = store.get_workflow(workflow_id)
+    if not workflow:
+        raise HTTPException(404, "Workflow not found")
+    return workflow
 
 @app.get("/tasks")
 def list_tasks():

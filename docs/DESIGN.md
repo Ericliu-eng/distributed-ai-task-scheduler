@@ -68,6 +68,29 @@ curl http://localhost:8000/benchmarks/routing
 
 `GET /metrics/timeseries?minutes=15` reconstructs 30 intervals from persisted task events and completion timestamps. The dashboard refreshes these trends every five seconds. Queue pressure shows each interval's peak queued and running counts; completion rate counts successful tasks per minute. Latency measures creation to successful completion, including retry and recovery waits. Intervals without completions have no latency sample. These live trends are separate from the saved benchmark reports.
 
+### Workflows (in progress)
+
+`POST /workflows` submits a DAG of tasks. Each node is routed like a standalone task, and lists the nodes it depends on:
+
+```bash
+curl -X POST http://localhost:8000/workflows \
+  -H "Content-Type: application/json" \
+  -d '{"name":"document-ai-pipeline","nodes":[
+        {"key":"parse","prompt":"Parse the uploaded document"},
+        {"key":"chunk","prompt":"Split the text into chunks","depends_on":["parse"]},
+        {"key":"metadata","prompt":"Extract title and authors","depends_on":["parse"]},
+        {"key":"embed","prompt":"Embed every chunk","depends_on":["chunk","metadata"]},
+        {"key":"index","prompt":"Build the vector index","depends_on":["embed"]}]}'
+
+curl http://localhost:8000/workflows/{workflow_id}
+```
+
+- **Validation before any write:** the graph is ordered with Kahn's algorithm in O(V + E). Empty or oversized graphs (over 100 nodes), bad or repeated keys, unknown or duplicate dependencies, self-dependencies, and cycles return HTTP 422 with the rule broken and the nodes involved; a cycle names one actual loop, such as `a -> b -> a`.
+- **Atomic submission:** the workflow, every node task, and every dependency edge commit in one transaction.
+- **Blocked until ready:** nodes without dependencies start `queued`; the rest start `blocked`. Claims only take `queued` rows, so a blocked node is never handed to a worker.
+
+**Not finished yet:** dependents are not unlocked when their upstream tasks succeed, so today only root nodes run. Unlocking, fail-fast propagation, and a dashboard view are the next steps.
+
 Interactive API documentation is served at `/docs`.
 
 ## Dashboard walkthrough
