@@ -15,14 +15,15 @@ A multi-worker inference scheduler that routes each request to a small or large 
 
 | What | Result | Conditions |
 | --- | --- | --- |
-| Queue throughput | **139 tasks/s, 0 duplicate claims** across 1,000 tasks | 8 workers, PostgreSQL 16, mock inference, median of 3 runs · [details](docs/BENCHMARKS.md#queue-throughput) |
+| Queue throughput | **683 tasks/s, 0 duplicate claims** across 1,000 tasks | 8 workers, PostgreSQL 16, mock inference, median of 3 runs · [details](docs/BENCHMARKS.md#queue-throughput) |
+| Round-trip optimization | **3–7x higher throughput**, 1,241 tasks/s with 16 workers | Profiled first, then cut each task to two statements · [details](docs/BENCHMARKS.md#scaling-with-worker-count) |
 | Crash recovery | **20 / 20 killed tasks recovered**, every stale write rejected | Short 200 ms test lease · [details](docs/BENCHMARKS.md#crash-recovery) |
 | Cost-aware routing | **100% of all-Sonnet quality at 35% lower cost** | Claude Haiku 4.5 / Sonnet 5.5, 50 graded cases, one sample each · [details](docs/EVALUATION.md) |
 
 ## How it works
 
 - **Explainable routing:** four ordered rules (urgent SLA, difficulty threshold, small-queue overflow, default small) pick a tier, and the reason is stored with every task.
-- **Exactly-one claim:** workers take tasks with `SELECT … FOR UPDATE SKIP LOCKED`, ordered by priority.
+- **Exactly-one claim:** workers take tasks with `SELECT … FOR UPDATE SKIP LOCKED`, ordered by priority. On PostgreSQL the claim and the write-back are one statement each, so a task costs two round trips.
 - **Leases and recovery:** a claim holds a 15 s lease renewed every 3 s; a monitor requeues tasks whose lease expires.
 - **Fencing:** every write-back must match the current attempt number, so a dead or slow worker cannot overwrite newer work.
 - **Retries and idempotency:** provider failures retry with jittered exponential backoff (0.5–1 s, then 1–2 s, within 3 attempts; capped at 30 s); idempotency keys deduplicate submissions.

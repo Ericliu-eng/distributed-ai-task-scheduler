@@ -1,5 +1,5 @@
 {
-  "measured_at": "2026-10-18T04:27:01.688181+00:00",
+  "measured_at": "2026-10-19T00:08:05.919997+00:00",
   "python": "3.11.0",
   "platform": "Windows-10-10.0.26300-SP0",
   "worker_mode": "threads in one process, each with its own database connection pool",
@@ -10,17 +10,17 @@
     {
       "workers": 1,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 49.31,
+      "throughput_tasks_per_second": 129.22,
       "throughput_runs": [
-        48.82,
-        49.89,
-        49.31
+        103.17,
+        129.22,
+        186.75
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 9892.11,
-        "p95": 19307.89,
-        "p99": 20036.5
+        "p50": 3936.96,
+        "p95": 7364.56,
+        "p99": 7663.08
       },
       "worker_completions": [
         1000
@@ -30,17 +30,17 @@
     {
       "workers": 4,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 146.31,
+      "throughput_tasks_per_second": 419.53,
       "throughput_runs": [
-        150.97,
-        146.31,
-        143.48
+        443.56,
+        395.77,
+        419.53
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 3308.97,
-        "p95": 6459.69,
-        "p99": 6732.98
+        "p50": 1446.6,
+        "p95": 2299.79,
+        "p99": 2361.48
       },
       "worker_completions": [
         250,
@@ -48,84 +48,84 @@
         250,
         250
       ],
-      "scaling_efficiency_pct": 74.2
+      "scaling_efficiency_pct": 81.2
     },
     {
       "workers": 8,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 148.87,
+      "throughput_tasks_per_second": 891.19,
       "throughput_runs": [
-        141.44,
-        148.87,
-        150.22
+        923.79,
+        891.19,
+        858.43
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 3149.05,
-        "p95": 6306.86,
-        "p99": 6601.98
+        "p50": 523.83,
+        "p95": 1055.43,
+        "p99": 1100.02
       },
       "worker_completions": [
+        124,
+        123,
         125,
         124,
-        124,
-        124,
-        124,
+        125,
+        128,
         126,
-        127,
-        126
+        125
       ],
-      "scaling_efficiency_pct": 37.7
+      "scaling_efficiency_pct": 86.2
     },
     {
       "workers": 16,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 134.99,
+      "throughput_tasks_per_second": 878.75,
       "throughput_runs": [
-        134.99,
-        120.33,
-        136.91
+        906.54,
+        878.75,
+        771.5
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 3840.77,
-        "p95": 7020.53,
-        "p99": 7270.06
+        "p50": 607.59,
+        "p95": 1071.83,
+        "p99": 1109.1
       },
       "worker_completions": [
+        62,
+        63,
         64,
+        64,
+        62,
+        62,
         61,
         62,
         62,
-        62,
-        62,
-        63,
-        63,
-        61,
         63,
         62,
         63,
+        65,
         63,
-        63,
-        63,
-        63
+        62,
+        60
       ],
-      "scaling_efficiency_pct": 17.1
+      "scaling_efficiency_pct": 42.5
     },
     {
       "workers": 1,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 23.3,
+      "throughput_tasks_per_second": 34.16,
       "throughput_runs": [
-        23.3,
-        23.82,
-        23.23
+        34.29,
+        34.16,
+        33.93
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 21376.21,
-        "p95": 40758.55,
-        "p99": 42448.32
+        "p50": 14713.51,
+        "p95": 27739.49,
+        "p99": 28937.15
       },
       "worker_completions": [
         1000
@@ -135,87 +135,87 @@
     {
       "workers": 4,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 80.07,
+      "throughput_tasks_per_second": 139.2,
       "throughput_runs": [
-        80.07,
-        82.24,
-        74.63
+        135.98,
+        139.2,
+        147.73
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 6398.29,
-        "p95": 11870.84,
-        "p99": 12344.09
+        "p50": 3570.21,
+        "p95": 6783.53,
+        "p99": 7071.31
       },
       "worker_completions": [
         250,
+        251,
         250,
-        250,
-        250
+        249
       ],
-      "scaling_efficiency_pct": 85.9
+      "scaling_efficiency_pct": 101.9
     },
     {
       "workers": 8,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 116.69,
+      "throughput_tasks_per_second": 304.1,
       "throughput_runs": [
-        117.08,
-        116.69,
-        100.12
+        305.73,
+        304.1,
+        300.37
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 4292.34,
-        "p95": 8088.61,
-        "p99": 8388.66
+        "p50": 1671.38,
+        "p95": 3104.92,
+        "p99": 3232.58
       },
       "worker_completions": [
+        125,
+        125,
+        125,
+        125,
         124,
-        126,
-        124,
-        124,
-        126,
         125,
         126,
         125
       ],
-      "scaling_efficiency_pct": 62.6
+      "scaling_efficiency_pct": 111.3
     },
     {
       "workers": 16,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 130.85,
+      "throughput_tasks_per_second": 532.28,
       "throughput_runs": [
-        115.83,
-        130.85,
-        133.16
+        600.65,
+        532.28,
+        517.11
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 3781.88,
-        "p95": 7197.45,
-        "p99": 7509.09
+        "p50": 934.67,
+        "p95": 1757.62,
+        "p99": 1827.6
       },
       "worker_completions": [
-        64,
         63,
-        61,
+        63,
+        63,
+        62,
+        62,
+        62,
         62,
         63,
         62,
-        61,
-        63,
-        63,
-        63,
-        63,
-        63,
-        63,
-        61,
         62,
-        63
+        63,
+        63,
+        62,
+        63,
+        63,
+        62
       ],
-      "scaling_efficiency_pct": 35.1
+      "scaling_efficiency_pct": 97.4
     }
   ]
 }

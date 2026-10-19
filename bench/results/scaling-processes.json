@@ -1,5 +1,5 @@
 {
-  "measured_at": "2026-10-18T04:36:20.406351+00:00",
+  "measured_at": "2026-10-19T00:15:36.727645+00:00",
   "python": "3.11.0",
   "platform": "Windows-10-10.0.26300-SP0",
   "worker_mode": "one operating-system process per worker, each with its own connection pool",
@@ -10,17 +10,17 @@
     {
       "workers": 1,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 51.76,
+      "throughput_tasks_per_second": 148.56,
       "throughput_runs": [
-        48.35,
-        53.82,
-        51.76
+        148.56,
+        210.25,
+        100.24
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 10107.03,
-        "p95": 18255.01,
-        "p99": 19072.41
+        "p50": 3527.12,
+        "p95": 6541.83,
+        "p99": 6688.93
       },
       "worker_completions": [
         1000
@@ -30,102 +30,102 @@
     {
       "workers": 4,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 189.91,
+      "throughput_tasks_per_second": 446.27,
       "throughput_runs": [
-        175.85,
-        189.91,
-        198.36
+        410.53,
+        446.27,
+        500.6
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 2752.14,
-        "p95": 5007.63,
-        "p99": 5199.14
+        "p50": 1167.75,
+        "p95": 2120.23,
+        "p99": 2202.59
       },
       "worker_completions": [
         249,
-        250,
+        249,
         251,
-        250
+        251
       ],
-      "scaling_efficiency_pct": 91.7
+      "scaling_efficiency_pct": 75.1
     },
     {
       "workers": 8,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 312.86,
+      "throughput_tasks_per_second": 1174.57,
       "throughput_runs": [
-        323.84,
-        304.14,
-        312.86
+        1174.57,
+        1331.09,
+        1126.92
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 1616.68,
-        "p95": 3025.66,
-        "p99": 3144.17
+        "p50": 406.7,
+        "p95": 798.68,
+        "p99": 834.05
       },
       "worker_completions": [
+        126,
+        124,
+        124,
         125,
-        125,
-        125,
-        125,
-        125,
-        125,
-        125,
+        126,
+        126,
+        124,
         125
       ],
-      "scaling_efficiency_pct": 75.6
+      "scaling_efficiency_pct": 98.8
     },
     {
       "workers": 16,
       "work_ms": 0.0,
-      "throughput_tasks_per_second": 500.8,
+      "throughput_tasks_per_second": 1241.14,
       "throughput_runs": [
-        500.8,
-        518.67,
-        474.6
+        995.66,
+        1243.65,
+        1241.14
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 991.4,
-        "p95": 1871.05,
-        "p99": 1939.75
+        "p50": 411.91,
+        "p95": 753.71,
+        "p99": 781.57
       },
       "worker_completions": [
         62,
-        63,
-        62,
-        63,
-        63,
-        62,
-        63,
-        63,
-        63,
-        62,
-        63,
-        63,
+        64,
         62,
         62,
         62,
-        62
+        62,
+        61,
+        63,
+        64,
+        61,
+        63,
+        64,
+        62,
+        63,
+        64,
+        61
       ],
-      "scaling_efficiency_pct": 60.5
+      "scaling_efficiency_pct": 52.2
     },
     {
       "workers": 1,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 23.31,
+      "throughput_tasks_per_second": 34.61,
       "throughput_runs": [
-        23.81,
-        22.81,
-        23.31
+        34.55,
+        34.61,
+        34.66
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 20542.63,
-        "p95": 40670.04,
-        "p99": 42400.83
+        "p50": 14463.07,
+        "p95": 27414.99,
+        "p99": 28571.1
       },
       "worker_completions": [
         1000
@@ -135,17 +135,17 @@
     {
       "workers": 4,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 94.17,
+      "throughput_tasks_per_second": 140.61,
       "throughput_runs": [
-        93.2,
-        96.45,
-        94.17
+        140.21,
+        140.82,
+        140.61
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 5267.25,
-        "p95": 10062.64,
-        "p99": 10487.16
+        "p50": 3575.74,
+        "p95": 6722.42,
+        "p99": 7000.77
       },
       "worker_completions": [
         250,
@@ -153,22 +153,22 @@
         250,
         250
       ],
-      "scaling_efficiency_pct": 101.0
+      "scaling_efficiency_pct": 101.6
     },
     {
       "workers": 8,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 177.22,
+      "throughput_tasks_per_second": 303.02,
       "throughput_runs": [
-        173.37,
-        177.83,
-        177.22
+        277.89,
+        303.02,
+        306.6
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 2802.03,
-        "p95": 5316.87,
-        "p99": 5541.92
+        "p50": 1654.52,
+        "p95": 3120.53,
+        "p99": 3247.72
       },
       "worker_completions": [
         125,
@@ -180,42 +180,42 @@
         125,
         125
       ],
-      "scaling_efficiency_pct": 95.0
+      "scaling_efficiency_pct": 109.4
     },
     {
       "workers": 16,
       "work_ms": 20.0,
-      "throughput_tasks_per_second": 328.03,
+      "throughput_tasks_per_second": 602.2,
       "throughput_runs": [
-        313.63,
-        333.29,
-        328.03
+        602.43,
+        593.88,
+        602.2
       ],
       "duplicate_claims": 0,
       "queue_latency_ms": {
-        "p50": 1505.79,
-        "p95": 2848.32,
-        "p99": 2977.83
+        "p50": 838.4,
+        "p95": 1556.69,
+        "p99": 1625.1
       },
       "worker_completions": [
         63,
         63,
-        61,
         62,
         63,
-        63,
-        62,
         62,
         63,
         62,
         62,
         63,
+        62,
+        62,
+        62,
         63,
         62,
         63,
         63
       ],
-      "scaling_efficiency_pct": 88.0
+      "scaling_efficiency_pct": 108.7
     }
   ]
 }

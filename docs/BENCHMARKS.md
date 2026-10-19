@@ -25,50 +25,57 @@ BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/s
 | Workers | 8 threads, separate connection pools |
 | Duplicate claims | 0 |
 | Tier distribution | 500 small / 500 large |
-| Throughput | 139.02 tasks/s |
-| Queue wait p50 | 3,418 ms |
-| Queue wait p95 | 6,716 ms |
-| Queue wait p99 | 7,063 ms |
-| Total latency p99 | 7,101 ms |
+| Throughput | 683.16 tasks/s |
+| Queue wait p50 | 738 ms |
+| Queue wait p95 | 1,373 ms |
+| Queue wait p99 | 1,431 ms |
+| Total latency p99 | 1,436 ms |
 
-This is the median of three runs (125.0, 139.0, and 139.9 tasks/s, measured 2026-10-16) on Windows 11 / Python 3.11 against PostgreSQL 16 in Docker, using mock inference with provider delay disabled. All 1,000 tasks are submitted before the timer starts and pinned to a 50/50 tier distribution so all eight workers participate. Queue wait and total latency are measured from the moment workers are released, so they show how long a task waits behind the burst, not how long submission took; earlier reports measured from task creation and overstated queue wait by roughly the submission time. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](../bench/results/postgres-1000-tasks.json). Throughput varies noticeably between sessions on the same machine: earlier sets of three runs measured 97–117 and 131–172 tasks/s. To separate code changes from machine noise, compare branches with interleaved runs against the same database; the database-clock change in this release measured 139 tasks/s median against 139 on the previous code. Every run had zero duplicate claims.
+This is the median of three runs (644.0, 683.2, and 695.6 tasks/s, measured 2026-10-18) on Windows 11 / Python 3.11 against PostgreSQL 16 in Docker, using mock inference with provider delay disabled. All 1,000 tasks are submitted before the timer starts and pinned to a 50/50 tier distribution so all eight workers participate. Queue wait and total latency are measured from the moment workers are released, so they show how long a task waits behind the burst, not how long submission took; earlier reports measured from task creation and overstated queue wait by roughly the submission time. It measures scheduler and database behavior, not model-provider latency. The machine-readable result is stored in [`bench/results/postgres-1000-tasks.json`](../bench/results/postgres-1000-tasks.json). Before the round-trip work described under [Scaling with worker count](#scaling-with-worker-count), the same benchmark measured 139 tasks/s (2026-10-16). Throughput varies noticeably between sessions on the same machine, so compare branches with interleaved runs against the same database rather than against numbers from another day. Every run had zero duplicate claims.
 
 For contrast, the same 1,000-task workload on SQLite also had zero duplicate claims but reached only about 60 tasks/s with very uneven work per worker, because SQLite serializes writers behind one database lock.
 
 ## Scaling with worker count
 
-Throughput is flat past four workers when workers are threads, but keeps rising when each worker is its own process. The plateau comes from the benchmark client, not from PostgreSQL. Run the matrix against a disposable database:
+Cutting per-task round trips raised throughput 3–7x. The fix came from measuring first: profiling showed the database idle while workers waited on their own round trips. Run the matrix against a disposable database:
 
 ```bash
-BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_benchmark   python -m bench.scaling --worker-mode processes --allow-reset --output scaling.json
+BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_benchmark \
+  python -m bench.scaling --worker-mode processes --allow-reset --output scaling.json
 ```
 
-Each cell is the median of three 1,000-task runs, measured on 2026-10-16 with PostgreSQL 16 in Docker on a 20-core Windows 11 machine. Every run had zero duplicate claims. Efficiency is throughput divided by single-worker throughput times the worker count.
+Each cell is the median of three 1,000-task runs on PostgreSQL 16 in Docker, on a 20-core Windows 11 machine. The 0 ms columns measure pure scheduling overhead; the 20 ms columns add a fixed simulated provider call. Every run had zero duplicate claims.
 
 | Workers | Threads, 0 ms | Processes, 0 ms | Threads, 20 ms | Processes, 20 ms |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 49 tasks/s (100%) | 52 tasks/s (100%) | 23 tasks/s (100%) | 23 tasks/s (100%) |
-| 4 | 146 (74%) | 190 (92%) | 80 (86%) | 94 (101%) |
-| 8 | 149 (38%) | 313 (76%) | 117 (63%) | 177 (95%) |
-| 16 | 135 (17%) | 501 (61%) | 131 (35%) | 328 (88%) |
+| 1 | 49 → 129 | 52 → 149 | 23 → 34 | 23 → 35 |
+| 4 | 146 → 420 | 190 → 446 | 80 → 139 | 94 → 141 |
+| 8 | 149 → 891 | 313 → 1,175 | 117 → 304 | 177 → 303 |
+| 16 | 135 → 879 | 501 → 1,241 | 131 → 532 | 328 → 602 |
 
-The 0 ms columns measure pure scheduling overhead; the 20 ms columns add a fixed simulated provider call. Raw results are in [`bench/results/scaling-threads.json`](../bench/results/scaling-threads.json) and [`bench/results/scaling-processes.json`](../bench/results/scaling-processes.json).
+All values are tasks/s, before → after. The before matrix ran on 2026-10-16 and the after matrix on 2026-10-18; raw results are in [`scaling-threads-before.json`](../bench/results/scaling-threads-before.json), [`scaling-processes-before.json`](../bench/results/scaling-processes-before.json), [`scaling-threads.json`](../bench/results/scaling-threads.json), and [`scaling-processes.json`](../bench/results/scaling-processes.json). Because throughput drifts between sessions, the gain was also measured with interleaved runs of both versions against one database, five runs each:
 
-### Where the time goes
+| Configuration | Previous code | Optimized | Change |
+| --- | ---: | ---: | ---: |
+| 1 worker | 44 tasks/s | 144 tasks/s | 3.3x |
+| 8 threads | 128 | 843 | 6.6x |
+| 8 processes | 219 | 789 | 3.6x |
+| 16 processes | 324 | 612 | 1.9x |
 
-`python -m bench.profile_db` samples `pg_stat_activity` during a run and reads `pg_stat_statements`; it needs PostgreSQL started with `shared_preload_libraries=pg_stat_statements`.
+With 16 processes the optimized runs ranged from 403 to 1,210 tasks/s. At that rate the result depends on the shared Docker VM and the database, not the client.
 
-| Run | Average backends executing SQL | Samples waiting for the client |
-| --- | ---: | ---: |
-| 1 worker | 0.22 of 1 | 87% |
-| 16 threads | 0.39 of 16 | 96% |
-| 16 processes | 0.96 of 16 | 82% |
+### What the profile showed
 
-- **The database is mostly idle.** Its connections spend most of their time waiting for the next client statement, often inside an open transaction. Lock waits never appear; the only server-side wait of note is the WAL flush on commit.
-- **Each task costs five transactions and five commits.** These are the claim, a busy heartbeat, a `should_fail` lookup, the result write-back, and an idle heartbeat. That adds up to about eleven round trips. A single worker therefore spends about 20 ms of scheduling overhead per task, which is longer than the 20 ms simulated provider call.
-- **Threads share one interpreter.** With 16 threads the database executes SQL only 2–4% of the time. Transactions stay open while a thread waits for the GIL, so throughput tops out near 150 tasks/s however many threads run. Compose runs every worker as a separate container, so the process columns describe deployment.
+`python -m bench.profile_db` samples `pg_stat_activity` during a run and reads `pg_stat_statements`; it needs PostgreSQL started with `shared_preload_libraries=pg_stat_statements`. The tables above follow these findings.
 
-The next step is to cut per-task round trips and commits, then rerun this matrix for a before/after comparison.
+1. **The database was mostly idle.** Before the change it waited for the client in 82–96% of samples; with 16 threads it executed SQL only 2–4% of the time. There were no lock waits. Threads plateaued near 150 tasks/s because they share one interpreter, while separate processes kept scaling.
+2. **Each task cost five transactions.** These were the claim, a busy heartbeat, a `should_fail` lookup, the write-back, and an idle heartbeat, which came to about eleven round trips and five commits. Each step was cheap; the cost was the waiting between them.
+3. **Fold the extra work into the two essential writes.** The claim now records the busy heartbeat and returns the simulated-failure flag, and the write-back records the idle heartbeat. A test counts transactions to keep each task at two. This alone gave about +60% at every worker count.
+4. **One statement each on PostgreSQL.** The claim is one autocommit statement. Data-modifying CTEs pick the task with `SKIP LOCKED`, claim it, insert its event, and record the heartbeat. The fenced write-back is the same, so a task costs two statements and no BEGIN or COMMIT round trips.
+5. **The single statements first ran slower.** Profiling the client found SQLAlchemy recompiling the claim on every call (3.6 ms of client CPU against a 0.5 ms round trip). It cannot cache PostgreSQL-specific `INSERT … ON CONFLICT`. Building both statements once with bound parameters and replacing the upsert with a cacheable `UPDATE` plus `INSERT … WHERE NOT EXISTS` cut client CPU per claim to 0.4 ms. A test asserts both statements stay cacheable.
+6. **One renewal thread per worker** replaces a thread started and joined for every task. The renewal records the busy heartbeat in its own fenced transaction, so a renewal that loses the race with the write-back changes nothing.
+
+After the change, transactions held open while waiting for the client fell from 37% to 2% of samples with 16 processes. The largest server-side wait is now the WAL flush on commit (`LWLock / WALWrite`, 14% of samples), because every task still commits twice. Possible next steps are batching claims and relying on PostgreSQL group commit; `synchronous_commit = off` would trade durability for speed and is not a default this scheduler should take.
 
 ## Crash recovery
 
@@ -93,8 +100,8 @@ Each trial starts a worker subprocess that claims a task and exits without writi
 | Tasks recovered and completed | 20 / 20 |
 | Stale writes rejected | 20 / 20 |
 | Lease / monitor poll | 200 ms / 20 ms |
-| Crash to completion p50 | 154.4 ms |
-| Crash to completion p95 | 168.61 ms |
-| Lease expiry to detection p95 | 34.57 ms |
+| Crash to completion p50 | 145.06 ms |
+| Crash to completion p95 | 178.9 ms |
+| Lease expiry to detection p95 | 41.15 ms |
 
-This is a single local Windows 11 / Python 3.11 / PostgreSQL 16 run, measured 2026-10-16. Lease deadlines come from the database clock, while the benchmark measures from the host, so a few milliseconds of host–container clock offset can appear in the lease-expiry-to-detection figure. It measures scheduler and database recovery with mock inference delay disabled; it excludes provider latency, container restart time, network faults, and orchestrator scheduling. The deliberately short lease makes the benchmark fast and does not represent the 15-second production default; with that default, a task killed mid-run in Docker Compose was recovered and completed about 17 seconds later. The machine-readable result is stored in [`bench/results/postgres-recovery-20.json`](../bench/results/postgres-recovery-20.json).
+This is a single local Windows 11 / Python 3.11 / PostgreSQL 16 run, measured 2026-10-18 after the round-trip changes. Lease deadlines come from the database clock, while the benchmark measures from the host, so a few milliseconds of host–container clock offset can appear in the lease-expiry-to-detection figure. It measures scheduler and database recovery with mock inference delay disabled; it excludes provider latency, container restart time, network faults, and orchestrator scheduling. The deliberately short lease makes the benchmark fast and does not represent the 15-second production default; with that default, a task killed mid-run in Docker Compose was recovered and completed about 17 seconds later. The machine-readable result is stored in [`bench/results/postgres-recovery-20.json`](../bench/results/postgres-recovery-20.json).

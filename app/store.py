@@ -4,8 +4,9 @@ import os
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from hashlib import sha256
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, case, create_engine, func, inspect, or_, select, text, update
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Interval, String, Text, bindparam, case, cast, create_engine, func, insert, inspect, literal, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.router import TIER_COST, route_task
@@ -237,6 +238,8 @@ class SchedulerStore:
             raise
 
     def claim(self, worker_id: str, tier: str, lease_seconds: float = 15.0) -> dict | None:
+        if self.engine.dialect.name == "postgresql":
+            return self._claim_one_statement(worker_id, tier, lease_seconds)
         with self.lock, self.Session.begin() as session:
             now = self._now_sql()
             eligible = or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= now)
@@ -270,7 +273,126 @@ class SchedulerStore:
                 task.attempt += 1
                 task.error = None
             session.add(Event(task_id=task.id, kind="claimed", message=f"{worker_id} claimed attempt {task.attempt}"))
-            return task_dict(task)
+            # The busy heartbeat rides in the claim transaction instead of its own.
+            self._set_worker_state(session, worker_id, "busy", task.id, tier)
+            claimed_task = task_dict(task)
+            # Returned with the claim so the worker needs no extra lookup.
+            claimed_task["fail_once"] = task.fail_once
+            return claimed_task
+
+    def _autocommit(self):
+        """A connection for single-statement writes, which are atomic on their own.
+
+        PostgreSQL hot-path writes are one statement each, so they skip the
+        separate BEGIN and COMMIT round trips. Built from the current engine so
+        engine options (such as a test schema map) still apply.
+        """
+        return self.engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _claim_statement():
+        """Claim, record the event, and mark the worker busy in one statement.
+
+        Data-modifying CTEs pick the next task with SKIP LOCKED, claim it, insert
+        its event, and record the worker heartbeat. When nothing is claimed, the
+        dependent inserts see no rows and write nothing. Built once with bound
+        parameters: constructing the statement tree costs far more client CPU
+        than the round trip it saves. Parameter names carry a ``p_`` prefix
+        because an UPDATE treats a parameter named like a column as a SET value.
+        """
+        now = func.now()
+        worker_id, tier = bindparam("p_worker_id", type_=String), bindparam("p_tier", type_=String)
+        picked = (
+            select(Task.id)
+            .where(Task.status == "queued", Task.route_tier == tier,
+                   or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= now))
+            .order_by(Task.priority.desc(), Task.created_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+            .cte("picked")
+        )
+        claimed = (
+            update(Task)
+            .where(Task.id == picked.c.id)
+            .values(status="running", worker_id=worker_id, started_at=now,
+                    lease_until=now + bindparam("p_lease", type_=Interval),
+                    next_attempt_at=None, attempt=Task.attempt + 1, error=None)
+            .returning(*Task.__table__.c)
+            .cte("claimed")
+        )
+        claim_event = insert(Event).from_select(
+            ["task_id", "kind", "message", "created_at"],
+            select(claimed.c.id, literal("claimed"),
+                   worker_id + literal(" claimed attempt ") + cast(claimed.c.attempt, String),
+                   now),
+        ).cte("claim_event")
+        # Two cacheable CTEs instead of an ON CONFLICT upsert: SQLAlchemy cannot
+        # cache PostgreSQL-specific inserts, so the claim would be recompiled on
+        # every call. Both CTEs see one snapshot, so exactly one applies: update a
+        # known worker, or register a worker seen for the first time. Worker IDs
+        # are unique per worker; if two processes shared one and registered at the
+        # same instant, the loser's claim would roll back whole and be retried.
+        heartbeat = (
+            update(Worker)
+            .where(Worker.id == worker_id, Worker.id.in_(select(claimed.c.worker_id)))
+            .values(status="busy", current_task_id=select(claimed.c.id).scalar_subquery(),
+                    last_heartbeat=now)
+            .cte("heartbeat")
+        )
+        known = select(Worker.id).where(Worker.id == worker_id).exists()
+        register = insert(Worker).from_select(
+            ["id", "model_tier", "status", "current_task_id", "last_heartbeat"],
+            select(worker_id, tier, literal("busy"), claimed.c.id, now).where(~known),
+        ).cte("register")
+        return select(claimed).add_cte(claim_event).add_cte(heartbeat).add_cte(register)
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _finish_statement():
+        """Fenced completion, its event, and the idle heartbeat in one statement."""
+        now = func.now()
+        worker_id = bindparam("p_worker_id", type_=String)
+        done = (
+            update(Task)
+            .where(Task.id == bindparam("p_task_id", type_=String), Task.worker_id == worker_id,
+                   Task.attempt == bindparam("p_attempt", type_=Integer), Task.status == "running")
+            .values(status="succeeded", result=bindparam("p_result", type_=Text), finished_at=now,
+                    lease_until=None, next_attempt_at=None)
+            .returning(Task.id)
+            .cte("done")
+        )
+        finish_event = insert(Event).from_select(
+            ["task_id", "kind", "message", "created_at"],
+            select(done.c.id, literal("succeeded"),
+                   worker_id + literal(" completed the task"), now),
+        ).cte("finish_event")
+        # The worker is idle again whether or not its write was accepted.
+        heartbeat = (
+            update(Worker).where(Worker.id == worker_id)
+            .values(status="idle", current_task_id=None, last_heartbeat=now)
+            .cte("heartbeat")
+        )
+        return select(func.count()).select_from(done).add_cte(finish_event).add_cte(heartbeat)
+
+    def _claim_one_statement(self, worker_id: str, tier: str,
+                             lease_seconds: float) -> dict | None:
+        params = {"p_worker_id": worker_id, "p_tier": tier,
+                  "p_lease": timedelta(seconds=lease_seconds)}
+        with self.lock, self._autocommit() as connection:
+            row = connection.execute(self._claim_statement(), params).mappings().first()
+        if row is None:
+            return None
+        claimed_task = task_dict(Task(**row))
+        claimed_task["fail_once"] = row["fail_once"]
+        return claimed_task
+
+    def _finish_one_statement(self, task_id: str, worker_id: str, attempt: int,
+                              result: str) -> bool:
+        params = {"p_task_id": task_id, "p_worker_id": worker_id, "p_attempt": attempt,
+                  "p_result": result}
+        with self.lock, self._autocommit() as connection:
+            return connection.execute(self._finish_statement(), params).scalar_one() == 1
 
     def renew_lease(self, task_id: str, worker_id: str, attempt: int,
                     lease_seconds: float = 15.0) -> bool:
@@ -284,7 +406,12 @@ class SchedulerStore:
                     Task.status == "running",
                 ).values(lease_until=self._now_sql() + timedelta(seconds=lease_seconds))
             )
-            return renewed.rowcount == 1
+            if renewed.rowcount != 1:
+                return False
+            # Same transaction as the fenced renewal: a renewal that loses the race
+            # with the write-back cannot mark the worker busy again.
+            self._set_worker_state(session, worker_id, "busy", task_id)
+            return True
 
     def get_expired_tasks(self, now: datetime | None = None) -> list[dict]:
         with self.Session() as session:
@@ -345,6 +472,18 @@ class SchedulerStore:
                     session.add(Event(task_id=task.id, kind=event_kind, message=message))
         return recovered
 
+    def _set_worker_state(self, session, worker_id: str, status: str,
+                          task_id: str | None, tier: str | None = None) -> None:
+        """Record a worker heartbeat inside the caller's transaction."""
+        updated = session.execute(
+            update(Worker).where(Worker.id == worker_id).values(
+                status=status, current_task_id=task_id, last_heartbeat=self._now_sql(),
+            ).execution_options(synchronize_session=False)
+        )
+        if updated.rowcount == 0 and tier is not None:
+            session.add(Worker(id=worker_id, model_tier=tier, status=status,
+                               current_task_id=task_id, last_heartbeat=self._now_sql()))
+
     def heartbeat(self, worker_id: str, tier: str, status: str = "idle",
                   task_id: str | None = None) -> None:
         with self.Session.begin() as session:
@@ -380,6 +519,8 @@ class SchedulerStore:
             return result
 
     def finish(self, task_id: str, worker_id: str, attempt: int, result: str) -> bool:
+        if self.engine.dialect.name == "postgresql":
+            return self._finish_one_statement(task_id, worker_id, attempt, result)
         with self.lock, self.Session.begin() as session:
             # Ownership must be checked by the write itself: a Python lock only
             # protects this store instance, not recovery/worker processes.
@@ -391,6 +532,8 @@ class SchedulerStore:
                          lease_until=None, next_attempt_at=None)
                 .execution_options(synchronize_session=False)
             )
+            # The worker is idle again whether or not its write was accepted.
+            self._set_worker_state(session, worker_id, "idle", None)
             if changed.rowcount != 1: return False
             session.add(Event(task_id=task_id, kind="succeeded", message=f"{worker_id} completed the task"))
             return True
@@ -414,6 +557,7 @@ class SchedulerStore:
                     finished_at=case((retryable, None), else_=failed_at),
                 ).execution_options(synchronize_session=False)
             )
+            self._set_worker_state(session, worker_id, "idle", None)
             if changed.rowcount != 1: return "fenced"
             # The UPDATE holds the row's write lock until this transaction commits.
             status = session.scalar(select(Task.status).where(Task.id == task_id))
@@ -422,11 +566,6 @@ class SchedulerStore:
                        else f"Failed after {attempt} attempts")
             session.add(Event(task_id=task_id, kind=kind, message=message))
             return status
-
-    def should_fail(self, task_id: str, attempt: int) -> bool:
-        with self.Session() as session:
-            task = session.get(Task, task_id)
-            return bool(task and task.fail_once and attempt == 1)
 
     def list_tasks(self, limit: int = 100) -> list[dict]:
         with self.Session() as session:

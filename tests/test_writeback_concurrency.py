@@ -1,6 +1,7 @@
 """Force ownership changes inside the writeback race, using separate connections."""
 
 import os
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -73,16 +74,29 @@ def task_events(store, task_id):
         ]
 
 
+def writes(statement, context, table=None):
+    """Whether a statement writes (to ``table``), including through a CTE.
+
+    PostgreSQL write-backs are one SELECT whose data-modifying CTEs do the
+    writes, so the statement type alone does not reveal them.
+    """
+    if table is None:
+        return bool(context.isupdate or context.isinsert
+                    or re.search(r"\b(UPDATE|INSERT INTO) (\w+\.)?(tasks|events|workers)\b", statement))
+    return bool(re.search(rf"\bINSERT INTO (\w+\.)?{table}\b", statement))
+
+
 def intercept_first_write(store, callback):
     """Pause before a statement acquires a write lock, after any ownership reads.
 
     The old ORM implementation flushed its event before its task update. Catching
-    the first mutation works for it and for the atomic UPDATE implementation.
+    the first mutation works for it, for the atomic UPDATE implementation, and
+    for the single-statement CTE write-back.
     """
     intercepted = []
 
     def before_execute(connection, cursor, statement, parameters, context, many):
-        if not intercepted and (context.isupdate or context.isinsert):
+        if not intercepted and writes(statement, context):
             intercepted.append(True)
             callback()
 
@@ -194,7 +208,7 @@ def test_event_insert_failure_rolls_back_writeback(stores, operation):
     events_before = task_events(observer, claimed["id"])
 
     def reject_event(connection, cursor, statement, parameters, context, many):
-        if context.isinsert and context.compiled.statement.table.name == "events":
+        if writes(statement, context, "events"):
             raise RuntimeError("injected event persistence failure")
 
     event.listen(writer.engine, "before_cursor_execute", reject_event)
