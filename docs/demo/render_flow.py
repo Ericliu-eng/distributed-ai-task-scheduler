@@ -64,7 +64,7 @@ EVENTS = [(1, 0.62, "routed", "routed 2c91 → small"), (1, 0.92, "claimed", "cl
           (3, 0.85, "succeeded", "succeeded 2c91"), (4, 0.62, "routed", "routed 7f3a → large"),
           (5, 0.65, "claimed", "claimed 7f3a #1"), (7, 0.3, "recovered", "recovered 7f3a"),
           (7, 0.66, "claimed", "claimed 7f3a #2"), (7, 0.92, "succeeded", "succeeded 7f3a")]
-EVIDENCE_ITEMS = [("Throughput benchmark", "139 tasks/s · 0 duplicates"),
+EVIDENCE_ITEMS = [("Throughput benchmark", "683 tasks/s · 0 duplicates"),
                   ("Crash-recovery benchmark", "20 / 20 recovered"),
                   ("Claude routing evaluation", "100% quality · −35% cost")]
 FONTS = {}
