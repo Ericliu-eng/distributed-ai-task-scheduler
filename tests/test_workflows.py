@@ -227,3 +227,19 @@ def test_concurrent_last_dependencies_unlock_exactly_once(monkeypatch):
     finally:
         for s in stores:
             s.engine.dispose()
+
+
+def test_tasks_inserted_without_new_columns_still_work(store):
+    """Code from before workflows (as in a rolling upgrade) inserts without them."""
+    from sqlalchemy import insert
+
+    with store.Session.begin() as session:
+        session.execute(insert(Task.__table__).values(
+            id="legacy-task", prompt="inserted by older code", sla="standard", priority=5,
+            route_tier="small", route_reason="legacy", difficulty_score=0.1,
+            estimated_cost=0.003, status="queued", attempt=0, max_attempts=3,
+            fail_once=False, recovery_count=0,
+        ))
+    task = store.get_task("legacy-task")
+    assert (task["pending_dependencies"], task["workflow_id"]) == (0, None)
+    assert store.claim("w", "small")["id"] == "legacy-task"

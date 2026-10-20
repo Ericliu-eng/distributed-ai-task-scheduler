@@ -79,7 +79,9 @@ class Task(Base):
     node_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Dependencies that have not succeeded yet. Each upstream success decrements
     # it in a single UPDATE; the one that reaches zero moves the task to queued.
-    pending_dependencies: Mapped[int] = mapped_column(Integer, default=0)
+    # The server default lets code that predates this column keep inserting
+    # tasks during a rolling upgrade.
+    pending_dependencies: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
     __table_args__ = (
         # Claim path: WHERE status/route_tier ORDER BY priority DESC, created_at.
