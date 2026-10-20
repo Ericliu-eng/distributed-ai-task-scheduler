@@ -77,6 +77,9 @@ class Task(Base):
     # Set only for workflow nodes; standalone tasks leave both NULL.
     workflow_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     node_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Dependencies that have not succeeded yet. Each upstream success decrements
+    # it in a single UPDATE; the one that reaches zero moves the task to queued.
+    pending_dependencies: Mapped[int] = mapped_column(Integer, default=0)
 
     __table_args__ = (
         # Claim path: WHERE status/route_tier ORDER BY priority DESC, created_at.
@@ -136,7 +139,8 @@ def task_dict(task: Task) -> dict:
             "recovery_count": task.recovery_count, "result": task.result, "error": task.error,
             "created_at": iso(task.created_at), "started_at": iso(task.started_at),
             "finished_at": iso(task.finished_at), "queue_ms": queue_ms, "run_ms": run_ms,
-            "workflow_id": task.workflow_id, "node_key": task.node_key}
+            "workflow_id": task.workflow_id, "node_key": task.node_key,
+            "pending_dependencies": task.pending_dependencies}
 
 class SchedulerStore:
     def __init__(self, database_url: str | None = None,
@@ -192,6 +196,8 @@ class SchedulerStore:
             statements.append("ALTER TABLE tasks ADD COLUMN workflow_id VARCHAR(36)")
         if "node_key" not in existing:
             statements.append("ALTER TABLE tasks ADD COLUMN node_key VARCHAR(64)")
+        if "pending_dependencies" not in existing:
+            statements.append("ALTER TABLE tasks ADD COLUMN pending_dependencies INTEGER NOT NULL DEFAULT 0")
         if "next_attempt_at" not in existing:
             column_type = "TIMESTAMPTZ" if self.engine.dialect.name == "postgresql" else "DATETIME"
             statements.append(f"ALTER TABLE tasks ADD COLUMN next_attempt_at {column_type}")
@@ -320,6 +326,27 @@ class SchedulerStore:
         return self.engine.connect().execution_options(isolation_level="AUTOCOMMIT")
 
     @staticmethod
+    def _unlock_dependents(finished_ids):
+        """UPDATE that releases one dependency for every task waiting on ``finished_ids``.
+
+        Counting down instead of re-checking every upstream status is what makes
+        concurrent completions safe. Two upstreams finishing at once would each
+        see the other as unfinished under READ COMMITTED, and neither would
+        unlock. Each decrement here takes the dependent's row lock, and the second
+        writer re-evaluates against the first one's committed row, so exactly one
+        of them reaches zero and queues the task. SET expressions read the old
+        row, so the CASE sees the count before this decrement.
+        """
+        waiting = select(TaskDependency.task_id).where(TaskDependency.depends_on_task_id.in_(finished_ids))
+        return (
+            update(Task)
+            .where(Task.id.in_(waiting), Task.status == "blocked")
+            .values(pending_dependencies=Task.pending_dependencies - 1,
+                    status=case((Task.pending_dependencies == 1, "queued"), else_=Task.status))
+            .returning(Task.id, Task.node_key, Task.status)
+        )
+
+    @staticmethod
     @lru_cache(maxsize=1)
     def _claim_statement():
         """Claim, record the event, and mark the worker busy in one statement.
@@ -403,7 +430,16 @@ class SchedulerStore:
             .values(status="idle", current_task_id=None, last_heartbeat=now)
             .cte("heartbeat")
         )
-        return select(func.count()).select_from(done).add_cte(finish_event).add_cte(heartbeat)
+        # A fenced (rejected) write leaves ``done`` empty, so nothing is unlocked.
+        unlocked = SchedulerStore._unlock_dependents(select(done.c.id)).cte("unlocked")
+        unblock_event = insert(Event).from_select(
+            ["task_id", "kind", "message", "created_at"],
+            select(unlocked.c.id, literal("unblocked"),
+                   unlocked.c.node_key + literal(": every dependency succeeded; queued"), now)
+            .where(unlocked.c.status == "queued"),
+        ).cte("unblock_event")
+        return (select(func.count()).select_from(done)
+                .add_cte(finish_event).add_cte(heartbeat).add_cte(unblock_event))
 
     def _claim_one_statement(self, worker_id: str, tier: str,
                              lease_seconds: float) -> dict | None:
@@ -566,6 +602,12 @@ class SchedulerStore:
             self._set_worker_state(session, worker_id, "idle", None)
             if changed.rowcount != 1: return False
             session.add(Event(task_id=task_id, kind="succeeded", message=f"{worker_id} completed the task"))
+            for unlocked_id, node_key, status in session.execute(
+                self._unlock_dependents([task_id]).execution_options(synchronize_session=False)
+            ).all():
+                if status == "queued":
+                    session.add(Event(task_id=unlocked_id, kind="unblocked",
+                                      message=f"{node_key}: every dependency succeeded; queued"))
             return True
 
     def fail_or_retry(self, task_id: str, worker_id: str, attempt: int, error: str) -> str:
@@ -633,6 +675,7 @@ class SchedulerStore:
                     id=task_ids[key], workflow_id=workflow_id, node_key=key,
                     prompt=node["prompt"], sla=node.get("sla", "standard"),
                     priority=node.get("priority", 5), status=status,
+                    pending_dependencies=len(needs),
                     route_tier=decision.tier, route_reason=decision.reason,
                     difficulty_score=decision.difficulty, estimated_cost=decision.estimated_cost,
                     request_hash=request_fingerprint(node["prompt"], node.get("sla", "standard"),
