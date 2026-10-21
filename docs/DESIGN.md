@@ -88,8 +88,10 @@ curl http://localhost:8000/workflows/{workflow_id}
 - **Validation before any write:** the graph is ordered with Kahn's algorithm in O(V + E). Empty or oversized graphs (over 100 nodes), bad or repeated keys, unknown or duplicate dependencies, self-dependencies, and cycles return HTTP 422 with the rule broken and the nodes involved; a cycle names one actual loop, such as `a -> b -> a`.
 - **Atomic submission:** the workflow, every node task, and every dependency edge commit in one transaction.
 - **Blocked until ready:** nodes without dependencies start `queued`; the rest start `blocked`. Claims only take `queued` rows, so a blocked node is never handed to a worker.
+- **Unlocking:** each node stores how many dependencies have not succeeded yet. A successful write-back decrements that count for every node waiting on it, and the decrement that reaches zero moves the node to `queued` and logs an `unblocked` event. On PostgreSQL this rides in the single-statement write-back, so a task still costs two round trips; a fenced write-back decrements nothing.
+- **Why a countdown:** re-checking "have all my dependencies succeeded?" loses the wake-up when two upstreams finish at once. Under READ COMMITTED both statements can snapshot the other upstream as still running, and the join never runs. Each decrement takes the dependent's row lock, and the second writer re-evaluates against the first one's committed row, so exactly one of them reaches zero. A test forces that interleaving by locking both upstream rows until both write-backs have taken their snapshots. The countdown passes, and a status-check variant leaves the join blocked.
 
-**Not finished yet:** dependents are not unlocked when their upstream tasks succeed, so today only root nodes run. Unlocking, fail-fast propagation, and a dashboard view are the next steps.
+**Not finished yet:** a node whose dependency fails permanently stays `blocked`, and a workflow's own status stays `running`. Fail-fast propagation, workflow completion, and a dashboard view are the next steps.
 
 Interactive API documentation is served at `/docs`.
 
