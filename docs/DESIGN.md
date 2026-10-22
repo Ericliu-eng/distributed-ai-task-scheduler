@@ -91,7 +91,11 @@ curl http://localhost:8000/workflows/{workflow_id}
 - **Unlocking:** each node stores how many dependencies have not succeeded yet. A successful write-back decrements that count for every node waiting on it, and the decrement that reaches zero moves the node to `queued` and logs an `unblocked` event. On PostgreSQL this rides in the single-statement write-back, so a task still costs two round trips; a fenced write-back decrements nothing.
 - **Why a countdown:** re-checking "have all my dependencies succeeded?" loses the wake-up when two upstreams finish at once. Under READ COMMITTED both statements can snapshot the other upstream as still running, and the join never runs. Each decrement takes the dependent's row lock, and the second writer re-evaluates against the first one's committed row, so exactly one of them reaches zero. A test forces that interleaving by locking both upstream rows until both write-backs have taken their snapshots. The countdown passes, and a status-check variant leaves the join blocked.
 
-**Not finished yet:** a node whose dependency fails permanently stays `blocked`, and a workflow's own status stays `running`. Fail-fast propagation, workflow completion, and a dashboard view are the next steps.
+- **Fail-fast:** when a node fails permanently, because its retries ran out or its final attempt's lease expired, its workflow becomes `failed`. Every node still `blocked` or `queued` becomes `skipped` with the reason recorded. Nodes already running may finish, but they unlock nothing.
+- **Completion:** each workflow counts the nodes that have not succeeded; the success that reaches zero marks it `succeeded`, for the same lost-wake-up reason as unlocking. A test forces both final write-backs to snapshot before either commits. A naive "am I the last node?" check leaves the workflow running forever; the countdown completes it exactly once.
+- **Lock order:** a failure and a concurrent success both update task rows and the workflow row. Every path locks task rows first, in id order, then the workflow row, so the two never wait on each other in opposite orders. A stress test reports 8 results at once, one of them a failure, in a 20-node workflow. Locking the workflow row first produced `DeadlockDetected`; the fixed order has not, and no node was left blocked or queued.
+
+**Not finished yet:** the dashboard does not show workflows yet.
 
 Interactive API documentation is served at `/docs`.
 

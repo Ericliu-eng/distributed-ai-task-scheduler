@@ -243,3 +243,199 @@ def test_tasks_inserted_without_new_columns_still_work(store):
     task = store.get_task("legacy-task")
     assert (task["pending_dependencies"], task["workflow_id"]) == (0, None)
     assert store.claim("w", "small")["id"] == "legacy-task"
+
+
+FORK = [
+    # Priorities fix the claim order of the roots.
+    {"key": "doomed", "prompt": "branch that will fail", "priority": 9},
+    {"key": "healthy", "prompt": "independent branch", "priority": 8},
+    {"key": "after_doomed", "prompt": "needs the failing branch", "depends_on": ["doomed"]},
+    {"key": "after_healthy", "prompt": "needs the healthy branch", "depends_on": ["healthy"]},
+]
+
+
+def statuses(store, workflow_id):
+    workflow = store.get_workflow(workflow_id)
+    return workflow["status"], {n["node_key"]: n["status"] for n in workflow["nodes"]}
+
+
+def final_attempt(store, task_id):
+    with store.Session.begin() as session:
+        session.get(Task, task_id).max_attempts = 1
+
+
+def test_workflow_succeeds_once_when_its_last_node_succeeds(store):
+    from worker.main import WorkerService
+
+    workflow = store.create_workflow("document-ai-pipeline", PIPELINE)
+    assert (workflow["status"], workflow["pending_tasks"]) == ("running", 5)
+    workers = [WorkerService(store, f"w-{tier}", tier, renew_interval=60) for tier in ("small", "large")]
+    while any([worker.run_once(delay=False) for worker in workers]):
+        pass
+
+    done = store.get_workflow(workflow["id"])
+    assert (done["status"], done["pending_tasks"]) == ("succeeded", 0)
+    assert done["finished_at"] is not None
+    finished = [e for e in store.events(limit=500) if e["kind"] == "workflow_succeeded"]
+    assert len(finished) == 1
+
+
+def test_permanent_failure_skips_everything_not_yet_running(store):
+    workflow = store.create_workflow("fork", FORK)
+    doomed = claim_node(store, workflow["id"], "doomed", "w1")
+    final_attempt(store, doomed["id"])
+
+    assert store.fail_or_retry(doomed["id"], "w1", doomed["attempt"], "HTTP 400") == "failed"
+    assert statuses(store, workflow["id"]) == ("failed", {
+        "doomed": "failed", "healthy": "skipped",
+        "after_doomed": "skipped", "after_healthy": "skipped",
+    })
+    skipped = node(store, workflow["id"], "after_healthy")
+    assert skipped["error"] == "Skipped: workflow failed because doomed failed"
+    assert store.get_workflow(workflow["id"])["finished_at"] is not None
+    assert store.claim("w2", "small") is None and store.claim("w2", "large") is None
+
+
+def test_retryable_failure_does_not_fail_the_workflow(store):
+    workflow = store.create_workflow("fork", FORK)
+    doomed = claim_node(store, workflow["id"], "doomed", "w1")
+    assert store.fail_or_retry(doomed["id"], "w1", doomed["attempt"], "HTTP 503") == "queued"
+    assert statuses(store, workflow["id"])[0] == "running"
+
+
+def test_running_node_finishes_but_unlocks_nothing_after_failure(store):
+    workflow = store.create_workflow("fork", FORK)
+    doomed = claim_node(store, workflow["id"], "doomed", "w1")
+    healthy = claim_node(store, workflow["id"], "healthy", "w2")
+    final_attempt(store, doomed["id"])
+    assert store.fail_or_retry(doomed["id"], "w1", doomed["attempt"], "HTTP 400") == "failed"
+
+    # The healthy node was already running; it may finish, but the workflow stays failed.
+    assert store.finish(healthy["id"], "w2", healthy["attempt"], "ok")
+    assert statuses(store, workflow["id"]) == ("failed", {
+        "doomed": "failed", "healthy": "succeeded",
+        "after_doomed": "skipped", "after_healthy": "skipped",
+    })
+
+
+def test_crash_on_the_final_attempt_fails_the_workflow(store):
+    from datetime import datetime, timedelta, timezone
+
+    workflow = store.create_workflow("fork", FORK)
+    doomed = claim_node(store, workflow["id"], "doomed", "w1")
+    final_attempt(store, doomed["id"])
+    later = datetime.now(timezone.utc) + timedelta(minutes=5)
+    assert store.requeue_stale_tasks(now=later) == [doomed["id"]]
+    assert statuses(store, workflow["id"]) == ("failed", {
+        "doomed": "failed", "healthy": "skipped",
+        "after_doomed": "skipped", "after_healthy": "skipped",
+    })
+
+
+TWO_LEAVES = [
+    {"key": "left", "prompt": "left leaf", "priority": 9},
+    {"key": "right", "prompt": "right leaf", "priority": 8},
+]
+
+
+@pytest.mark.skipif(not POSTGRES_TEST_URL, reason="set TEST_DATABASE_URL to force the completion race")
+def test_concurrent_last_successes_complete_the_workflow_exactly_once(monkeypatch):
+    """Same lost wake-up as unlocking, one level up.
+
+    Both leaf write-backs snapshot the workflow while the other leaf is still
+    running; "are all my nodes done?" would leave the workflow running forever.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy import text
+
+    monkeypatch.setenv("PGOPTIONS", "-c lock_timeout=10s")
+    stores = [SchedulerStore(POSTGRES_TEST_URL) for _ in range(3)]
+    setup, left_store, right_store = stores
+    setup.init()
+    setup.reset()
+    waiting = text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                   "AND wait_event_type = 'Lock' AND query LIKE 'WITH done AS%'")
+    try:
+        for _ in range(5):
+            workflow = setup.create_workflow("leaves", TWO_LEAVES)
+            left = claim_node(setup, workflow["id"], "left", "w1")
+            right = claim_node(setup, workflow["id"], "right", "w2")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                with setup.engine.connect() as blocker, setup._autocommit() as probe:
+                    try:
+                        blocker.execute(text("SELECT id FROM tasks WHERE id IN (:a, :b) FOR UPDATE"),
+                                        {"a": left["id"], "b": right["id"]})
+                        results = [
+                            pool.submit(left_store.finish, left["id"], "w1", left["attempt"], "ok"),
+                            pool.submit(right_store.finish, right["id"], "w2", right["attempt"], "ok"),
+                        ]
+                        deadline = time.monotonic() + 5
+                        while probe.execute(waiting).scalar_one() < 2:
+                            assert time.monotonic() < deadline, "write-backs never queued on the lock"
+                            time.sleep(0.02)
+                    finally:
+                        blocker.rollback()
+                assert [future.result(timeout=15) for future in results] == [True, True]
+            done = setup.get_workflow(workflow["id"])
+            assert (done["status"], done["pending_tasks"]) == ("succeeded", 0)
+            completions = [e for e in setup.events(limit=500)
+                           if e["kind"] == "workflow_succeeded" and e["task_id"] in (left["id"], right["id"])]
+            assert len(completions) == 1
+    finally:
+        for s in stores:
+            s.engine.dispose()
+
+
+@pytest.mark.skipif(not POSTGRES_TEST_URL, reason="set TEST_DATABASE_URL to stress fail-fast against unlocking")
+def test_concurrent_successes_and_failures_never_deadlock_or_strand_nodes(monkeypatch):
+    """Many nodes succeed while one fails, all at once, in a wide two-level DAG.
+
+    Unlocks and fail-fast skips lock overlapping task rows and the same
+    workflow row. Every path locks task rows in id order before the workflow
+    row, so nothing may deadlock, and a failed workflow may leave no node
+    blocked or queued.
+    """
+    import random
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setenv("PGOPTIONS", "-c lock_timeout=10s")
+    stores = [SchedulerStore(POSTGRES_TEST_URL) for _ in range(9)]
+    setup, racers = stores[0], stores[1:]
+    setup.init()
+    setup.reset()
+    rng = random.Random(20261021)
+    try:
+        for round_number in range(6):
+            roots = [{"key": f"r{i}", "prompt": f"root task {i}", "priority": 5} for i in range(8)]
+            joins = [{"key": f"j{i}", "prompt": f"join task {i}",
+                      "depends_on": rng.sample([r["key"] for r in roots], 3)} for i in range(12)]
+            workflow = setup.create_workflow(f"stress-{round_number}", roots + joins)
+            claimed = []
+            while len(claimed) < len(roots):
+                for tier in ("small", "large"):
+                    task = setup.claim(f"w{len(claimed)}", tier)
+                    if task:
+                        claimed.append(task)
+            loser = rng.choice(claimed)
+            final_attempt(setup, loser["id"])
+            start = threading.Barrier(len(claimed))
+
+            def report(index, task):
+                start.wait(timeout=10)
+                store = racers[index]
+                if task["id"] == loser["id"]:
+                    return store.fail_or_retry(task["id"], task["worker_id"], task["attempt"], "HTTP 400")
+                return store.finish(task["id"], task["worker_id"], task["attempt"], "ok")
+
+            with ThreadPoolExecutor(max_workers=len(claimed)) as pool:
+                outcomes = list(pool.map(report, range(len(claimed)), claimed))
+            assert outcomes.count("failed") == 1 and outcomes.count(True) == len(claimed) - 1
+
+            status, nodes = statuses(setup, workflow["id"])
+            assert status == "failed"
+            assert not {key for key, state in nodes.items() if state in ("blocked", "queued")}
+    finally:
+        for s in stores:
+            s.engine.dispose()
