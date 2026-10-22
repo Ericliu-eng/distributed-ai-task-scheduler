@@ -96,9 +96,14 @@ class Workflow(Base):
     __tablename__ = "workflows"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
+    # running -> succeeded when every node succeeds, or failed when one fails
+    # permanently (fail-fast: remaining nodes are skipped).
     status: Mapped[str] = mapped_column(String(16), default="running")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Nodes that have not succeeded yet; the success that reaches zero completes
+    # the workflow, for the same reason dependents count down.
+    pending_tasks: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
 class TaskDependency(Base):
     """An edge: ``task_id`` may run only after ``depends_on_task_id`` succeeds."""
@@ -163,6 +168,7 @@ class SchedulerStore:
     def init(self):
         Base.metadata.create_all(self.engine)
         self._migrate_task_columns()
+        self._migrate_workflow_columns()
         self._ensure_task_indexes()
 
     def _ensure_task_indexes(self) -> None:
@@ -235,6 +241,20 @@ class SchedulerStore:
         already run; fetching it first would add a round trip to every step.
         """
         return func.now() if self.engine.dialect.name == "postgresql" else utcnow()
+
+    def _migrate_workflow_columns(self) -> None:
+        """Add columns that workflows tables from earlier versions are missing."""
+        existing = {column["name"] for column in inspect(self.engine).get_columns("workflows")}
+        if "pending_tasks" in existing:
+            return
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(text(
+                    "ALTER TABLE workflows ADD COLUMN pending_tasks INTEGER NOT NULL DEFAULT 0"))
+        except (OperationalError, ProgrammingError) as exc:
+            message = str(exc).lower()
+            if "duplicate column" not in message and "already exists" not in message:
+                raise
 
     def _depths(self, session) -> tuple[int, int]:
         rows = session.execute(select(Task.route_tier, func.count()).where(Task.status == "queued").group_by(Task.route_tier)).all()
@@ -340,13 +360,71 @@ class SchedulerStore:
         row, so the CASE sees the count before this decrement.
         """
         waiting = select(TaskDependency.task_id).where(TaskDependency.depends_on_task_id.in_(finished_ids))
+        # Lock in id order: fail-fast skips lock task rows in the same order, so
+        # an unlock and a skip touching the same rows cannot deadlock.
+        locked = (select(Task.id).where(Task.id.in_(waiting), Task.status == "blocked")
+                  .order_by(Task.id).with_for_update())
         return (
             update(Task)
-            .where(Task.id.in_(waiting), Task.status == "blocked")
+            .where(Task.id.in_(locked), Task.status == "blocked")
             .values(pending_dependencies=Task.pending_dependencies - 1,
                     status=case((Task.pending_dependencies == 1, "queued"), else_=Task.status))
             .returning(Task.id, Task.node_key, Task.status)
         )
+
+    @staticmethod
+    def _count_down_workflow(finished_workflow_ids, *after):
+        """UPDATE that records one more succeeded node of a workflow.
+
+        The decrement that reaches zero marks the workflow succeeded. A failed
+        workflow keeps counting but never changes status again. ``after`` names
+        statements whose rows must be locked first. Task rows are always locked
+        before the workflow row on every path, so no two writers wait on each
+        other in opposite orders.
+        """
+        reaches_zero = (Workflow.pending_tasks == 1) & (Workflow.status == "running")
+        ordered = [select(func.count()).select_from(cte).scalar_subquery() >= 0 for cte in after]
+        return (
+            update(Workflow)
+            .where(Workflow.id.in_(finished_workflow_ids), *ordered)
+            .values(pending_tasks=Workflow.pending_tasks - 1,
+                    status=case((reaches_zero, "succeeded"), else_=Workflow.status),
+                    finished_at=case((reaches_zero, func.now()), else_=Workflow.finished_at))
+            .returning(Workflow.id, Workflow.status, Workflow.pending_tasks)
+        )
+
+    def _fail_workflow(self, session, task_id: str, node_key: str | None,
+                       workflow_id: str | None) -> None:
+        """Fail-fast: a permanently failed node fails its workflow.
+
+        Every node still blocked or queued is skipped. Running nodes may finish,
+        but they unlock nothing, since their dependents are skipped. Task rows
+        are locked in id order before the workflow row, matching the success path.
+        """
+        if workflow_id is None:
+            return
+        now = self._now_sql()
+        reason = f"Skipped: workflow failed because {node_key} failed"
+        locked = (select(Task.id)
+                  .where(Task.workflow_id == workflow_id, Task.status.in_(["blocked", "queued"]))
+                  .order_by(Task.id).with_for_update())
+        skipped = session.execute(
+            update(Task).where(Task.id.in_(locked), Task.status.in_(["blocked", "queued"]))
+            .values(status="skipped", finished_at=now, error=reason, next_attempt_at=None)
+            .returning(Task.id, Task.node_key)
+            .execution_options(synchronize_session=False)
+        ).all()
+        for skipped_id, skipped_key in skipped:
+            session.add(Event(task_id=skipped_id, kind="skipped", message=f"{skipped_key}: {reason}"))
+        failed = session.execute(
+            update(Workflow).where(Workflow.id == workflow_id, Workflow.status == "running")
+            .values(status="failed", finished_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if failed.rowcount == 1:
+            session.add(Event(task_id=task_id, kind="workflow_failed",
+                              message=f"Workflow failed: {node_key} failed permanently; "
+                                      f"skipped {len(skipped)} remaining node(s)"))
 
     @staticmethod
     @lru_cache(maxsize=1)
@@ -418,7 +496,7 @@ class SchedulerStore:
                    Task.attempt == bindparam("p_attempt", type_=Integer), Task.status == "running")
             .values(status="succeeded", result=bindparam("p_result", type_=Text), finished_at=now,
                     lease_until=None, next_attempt_at=None)
-            .returning(Task.id)
+            .returning(Task.id, Task.workflow_id)
             .cte("done")
         )
         finish_event = insert(Event).from_select(
@@ -440,8 +518,20 @@ class SchedulerStore:
                    unlocked.c.node_key + literal(": every dependency succeeded; queued"), now)
             .where(unlocked.c.status == "queued"),
         ).cte("unblock_event")
+        # Referencing ``unlocked`` makes PostgreSQL finish the unlock (task row
+        # locks) before it locks the workflow row; CTE order is otherwise unspecified.
+        completed = SchedulerStore._count_down_workflow(
+            select(done.c.workflow_id), unlocked).cte("completed")
+        complete_event = insert(Event).from_select(
+            ["task_id", "kind", "message", "created_at"],
+            select(select(done.c.id).scalar_subquery(), literal("workflow_succeeded"),
+                   literal("Workflow succeeded: every node finished"), now)
+            .select_from(completed)
+            .where(completed.c.status == "succeeded", completed.c.pending_tasks == 0),
+        ).cte("complete_event")
         return (select(func.count()).select_from(done)
-                .add_cte(finish_event).add_cte(heartbeat).add_cte(unblock_event))
+                .add_cte(finish_event).add_cte(heartbeat).add_cte(unblock_event)
+                .add_cte(complete_event))
 
     def _claim_one_statement(self, worker_id: str, tier: str,
                              lease_seconds: float) -> dict | None:
@@ -538,6 +628,8 @@ class SchedulerStore:
                 if changed.rowcount == 1:
                     recovered.append(task.id)
                     session.add(Event(task_id=task.id, kind=event_kind, message=message))
+                    if event_kind == "failed":
+                        self._fail_workflow(session, task.id, task.node_key, task.workflow_id)
         return recovered
 
     def _set_worker_state(self, session, worker_id: str, status: str,
@@ -610,6 +702,13 @@ class SchedulerStore:
                 if status == "queued":
                     session.add(Event(task_id=unlocked_id, kind="unblocked",
                                       message=f"{node_key}: every dependency succeeded; queued"))
+            workflow_id = select(Task.workflow_id).where(Task.id == task_id).scalar_subquery()
+            for _, workflow_status, pending in session.execute(
+                self._count_down_workflow(workflow_id).execution_options(synchronize_session=False)
+            ).all():
+                if workflow_status == "succeeded" and pending == 0:
+                    session.add(Event(task_id=task_id, kind="workflow_succeeded",
+                                      message="Workflow succeeded: every node finished"))
             return True
 
     def fail_or_retry(self, task_id: str, worker_id: str, attempt: int, error: str) -> str:
@@ -639,6 +738,10 @@ class SchedulerStore:
             message = (f"Attempt {attempt} failed; retry in {delay:.2f}s" if status == "queued"
                        else f"Failed after {attempt} attempts")
             session.add(Event(task_id=task_id, kind=kind, message=message))
+            if status == "failed":
+                node_key, workflow_id = session.execute(
+                    select(Task.node_key, Task.workflow_id).where(Task.id == task_id)).one()
+                self._fail_workflow(session, task_id, node_key, workflow_id)
             return status
 
     def list_tasks(self, limit: int = 100) -> list[dict]:
@@ -663,7 +766,7 @@ class SchedulerStore:
         workflow_id = str(uuid.uuid4())
         task_ids = {key: str(uuid.uuid4()) for key in order}
         with self.lock, self.Session.begin() as session:
-            session.add(Workflow(id=workflow_id, name=name))
+            session.add(Workflow(id=workflow_id, name=name, pending_tasks=len(order)))
             small, large = self._depths(session)
             for key in order:
                 node = by_key[key]
@@ -710,6 +813,7 @@ class SchedulerStore:
         iso = lambda value: value.isoformat() if value else None
         return {
             "id": workflow.id, "name": workflow.name, "status": workflow.status,
+            "pending_tasks": workflow.pending_tasks,
             "created_at": iso(workflow.created_at), "finished_at": iso(workflow.finished_at),
             "nodes": [{**task_dict(nodes[key]), "depends_on": sorted(needs[key])} for key in order],
         }
