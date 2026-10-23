@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Orbit · Task overview</title>
-  <link rel="stylesheet" href="/static/styles.css?v=8">
+  <link rel="stylesheet" href="/static/styles.css?v=11">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -33,6 +33,7 @@
     </section>
     <nav class="view-nav" aria-label="Dashboard views">
       <a href="#overview" data-view="overview" aria-current="page">Overview</a>
+      <a href="#workflows" data-view="workflows">Workflows</a>
       <a href="#activity" data-view="activity">Activity</a>
       <a href="#benchmarks" data-view="benchmarks">Benchmarks</a>
     </nav>
@@ -60,7 +61,7 @@
       <section class="panel queue-panel" aria-labelledby="queueTitle">
         <div class="panel-head"><div class="heading-inline"><h2 id="queueTitle">Task queue</h2><span class="count-label" id="taskCount">0 tasks</span></div><label class="search-label"><span class="sr-only">Search tasks</span><input type="search" id="taskSearch" placeholder="Search prompt or task ID…"></label></div>
         <div class="filters" role="group" aria-label="Filter tasks by status">
-          <button class="filter active" data-status="all" aria-pressed="true">All</button><button class="filter" data-status="queued" aria-pressed="false">Queued</button><button class="filter" data-status="running" aria-pressed="false">Running</button><button class="filter" data-status="succeeded" aria-pressed="false">Succeeded</button><button class="filter" data-status="failed" aria-pressed="false">Failed</button>
+          <button class="filter active" data-status="all" aria-pressed="true">All</button><button class="filter" data-status="queued" aria-pressed="false">Queued</button><button class="filter" data-status="running" aria-pressed="false">Running</button><button class="filter" data-status="succeeded" aria-pressed="false">Succeeded</button><button class="filter" data-status="failed" aria-pressed="false">Failed</button><button class="filter" data-status="blocked" aria-pressed="false">Blocked</button><button class="filter" data-status="skipped" aria-pressed="false">Skipped</button>
         </div>
         <div class="table-wrap"><table class="task-table"><caption class="sr-only">Recent tasks. Expand a task to view its routing decision and result.</caption><thead><tr><th scope="col">Task</th><th scope="col">Model tier</th><th scope="col">Status</th><th scope="col">Attempts</th><th scope="col">Total time</th><th scope="col"><span class="sr-only">Details</span></th></tr></thead><tbody id="taskRows"><tr><td colspan="6" class="empty">Loading tasks…</td></tr></tbody></table></div>
         <div class="table-footer"><span id="queueNote">Most recent 100 tasks</span><span>Updates every 2 seconds</span></div>
@@ -68,6 +69,24 @@
       <div class="support-grid">
         <section class="panel" aria-labelledby="workersTitle"><div class="panel-head"><h2 id="workersTitle">Workers</h2><span class="quiet-label">Heartbeat status</span></div><div id="workers"><p class="empty">Loading workers…</p></div></section>
         <section class="panel routing-summary" aria-labelledby="routingTitle"><div class="panel-head"><h2 id="routingTitle">Routing summary</h2><span class="quiet-label">Mock inference</span></div><div class="routing-bar" role="img" aria-label="No routed tasks" id="routingBar"><span id="smallBar"></span><span id="largeBar"></span></div><div class="routing-labels"><span><i class="small-key" aria-hidden="true"></i>Small <b id="smallCount">0</b></span><span><i class="large-key" aria-hidden="true"></i>Large <b id="largeCount">0</b></span></div><dl class="summary-list"><div><dt>Average total time</dt><dd id="mLatency">—</dd></div><div><dt>Estimated cost saving</dt><dd id="mSaved">—</dd></div></dl><p class="footnote">Cost uses fixed per-request estimates against an all-large baseline.</p></section>
+      </div>
+    </section>
+    <section id="workflows" class="view" aria-label="Workflows" hidden>
+      <div class="section-toolbar workflow-toolbar">
+        <p class="section-description">A node runs once every dependency succeeds. A permanent failure fails the workflow and skips every node that has not started.</p>
+        <div class="page-actions" id="workflowDemoActions"><button id="pipelineDemoBtn" class="button secondary">Run pipeline demo</button><button id="failingDemoBtn" class="button secondary">Run failing pipeline</button></div>
+      </div>
+      <div class="workflow-grid">
+        <section class="panel workflow-list-panel" aria-labelledby="workflowListTitle">
+          <div class="panel-head"><h2 id="workflowListTitle">Recent workflows</h2><span class="count-label" id="workflowCount">0 workflows</span></div>
+          <div id="workflowList"><p class="empty">Loading workflows…</p></div>
+        </section>
+        <section class="panel workflow-detail" aria-labelledby="workflowTitle">
+          <div class="panel-head"><div><h2 id="workflowTitle">No workflow selected</h2><p class="section-description" id="workflowMeta">Run the pipeline demo or submit a workflow through the API.</p></div><span id="workflowState"></span></div>
+          <div id="workflowGraph" class="dag-wrap"></div>
+          <div class="dag-legend" aria-hidden="true"><span class="dag-key-item s-blocked">Blocked</span><span class="dag-key-item s-queued">Queued</span><span class="dag-key-item s-running">Running</span><span class="dag-key-item s-succeeded">Succeeded</span><span class="dag-key-item s-failed">Failed</span><span class="dag-key-item s-skipped">Skipped</span></div>
+          <div class="table-wrap"><table class="node-table"><caption class="sr-only">Nodes of the selected workflow in dependency order</caption><thead><tr><th scope="col">Node</th><th scope="col">Status</th><th scope="col">Depends on</th><th scope="col">Model tier</th><th scope="col">Attempts</th><th scope="col">Total time</th></tr></thead><tbody id="nodeRows"><tr><td colspan="6" class="empty">Select a workflow to see its nodes.</td></tr></tbody></table></div>
+        </section>
       </div>
     </section>
     <section id="activity" class="view" aria-label="Recent activity" hidden>
@@ -84,6 +103,6 @@
   <dialog id="demoDialog" aria-labelledby="demoTitle" aria-describedby="demoDescription"><form method="dialog"><h2 id="demoTitle">Start a fresh demo?</h2><p id="demoDescription">This replaces the current tasks and activity with five sample tasks, including a simulated failure. Workers will process them when available.</p><div class="dialog-actions"><button class="button secondary" value="cancel" autofocus>Cancel</button><button class="button primary" value="confirm">Replace with demo tasks</button></div></form></dialog>
   <div id="toast" class="toast" role="status"></div>
   <script src="/static/charts.js?v=1"></script>
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>
