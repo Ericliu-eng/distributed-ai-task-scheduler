@@ -751,7 +751,9 @@ class SchedulerStore:
     def create_workflow(self, name: str, nodes: list[dict]) -> dict:
         """Write a workflow, its tasks, and its edges in one transaction.
 
-        Each node is ``{"key", "prompt", "depends_on", "sla", "priority"}``. The
+        Each node is ``{"key", "prompt", "depends_on", "sla", "priority"}``, plus
+        the demo-only ``fail_once`` and ``max_attempts`` (a node that fails once
+        with one attempt fails permanently). The
         graph is validated first (raising DagError), so nothing is written for
         an invalid workflow. Nodes without dependencies start queued; the rest
         start blocked. Every node is routed at submission like a standalone task.
@@ -781,10 +783,12 @@ class SchedulerStore:
                     prompt=node["prompt"], sla=node.get("sla", "standard"),
                     priority=node.get("priority", 5), status=status,
                     pending_dependencies=len(needs),
+                    fail_once=node.get("fail_once", False),
+                    max_attempts=node.get("max_attempts", 3),
                     route_tier=decision.tier, route_reason=decision.reason,
                     difficulty_score=decision.difficulty, estimated_cost=decision.estimated_cost,
                     request_hash=request_fingerprint(node["prompt"], node.get("sla", "standard"),
-                                                     node.get("priority", 5), False),
+                                                     node.get("priority", 5), node.get("fail_once", False)),
                 ))
                 session.add_all(TaskDependency(task_id=task_ids[key], depends_on_task_id=task_ids[need])
                                 for need in needs)
@@ -792,6 +796,25 @@ class SchedulerStore:
                                   message=f"{key}: routed to {decision.tier.upper()}: {decision.reason}"))
             session.flush()
         return self.get_workflow(workflow_id)
+
+    def list_workflows(self, limit: int = 20) -> list[dict]:
+        """Recent workflows, newest first, with how many nodes are in each state."""
+        iso = lambda value: value.isoformat() if value else None
+        with self.Session() as session:
+            workflows = session.scalars(
+                select(Workflow).order_by(Workflow.created_at.desc(), Workflow.id).limit(limit)).all()
+            ids = [workflow.id for workflow in workflows]
+            counts: dict[str, dict[str, int]] = {workflow_id: {} for workflow_id in ids}
+            for workflow_id, status, count in session.execute(
+                select(Task.workflow_id, Task.status, func.count())
+                .where(Task.workflow_id.in_(ids)).group_by(Task.workflow_id, Task.status)
+            ):
+                counts[workflow_id][status] = count
+        return [{
+            "id": workflow.id, "name": workflow.name, "status": workflow.status,
+            "created_at": iso(workflow.created_at), "finished_at": iso(workflow.finished_at),
+            "nodes": sum(counts[workflow.id].values()), "node_states": counts[workflow.id],
+        } for workflow in workflows]
 
     def get_workflow(self, workflow_id: str) -> dict | None:
         """A workflow and its nodes in dependency order, each with its upstream keys."""

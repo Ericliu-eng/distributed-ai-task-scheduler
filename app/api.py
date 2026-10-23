@@ -45,6 +45,7 @@ class WorkflowNode(BaseModel):
     depends_on: list[str] = Field(default_factory=list, max_length=MAX_NODES)
     sla: str = Field(default="standard", pattern="^(standard|urgent)$")
     priority: int = Field(default=5, ge=1, le=10)
+    fail_once: bool = False
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
@@ -91,10 +92,16 @@ def create_task(payload: TaskCreate, response: Response):
 @app.post("/workflows", status_code=201)
 def create_workflow(payload: WorkflowCreate):
     """Submit a DAG of tasks; nodes run only after every dependency succeeds."""
+    if any(node.fail_once for node in payload.nodes):
+        require_demo_mode("Simulated failure")
     try:
         return store.create_workflow(payload.name, [node.model_dump() for node in payload.nodes])
     except DagError as exc:
         raise HTTPException(422, {"problem": exc.problem, "message": str(exc), "nodes": exc.nodes}) from exc
+
+@app.get("/workflows")
+def list_workflows(limit: int = Query(20, ge=1, le=100)):
+    return store.list_workflows(limit)
 
 @app.get("/workflows/{workflow_id}")
 def get_workflow(workflow_id: str):
@@ -134,6 +141,27 @@ def event_feed():
 def benchmark_report(kind: str):
     """Return saved evidence independently of live queue/database availability."""
     return load_result(kind)
+
+DEMO_PIPELINE = [
+    {"key": "parse", "prompt": "Parse the uploaded contract PDF into plain text."},
+    {"key": "chunk", "prompt": "Split the contract text into overlapping chunks.", "depends_on": ["parse"]},
+    {"key": "metadata", "prompt": "Extract the parties, dates, and governing law.", "depends_on": ["parse"]},
+    {"key": "embed", "prompt": "Generate an embedding for every chunk.", "depends_on": ["chunk", "metadata"]},
+    {"key": "index", "prompt": "Write the embeddings and metadata to the vector index.", "depends_on": ["embed"]},
+]
+
+@app.post("/demo/workflow", status_code=201)
+def demo_workflow(scenario: str = Query("retry", pattern="^(retry|failure)$")):
+    """Submit the document pipeline. ``retry``: metadata fails once, then recovers.
+    ``failure``: metadata fails on its only attempt, so the workflow fails fast."""
+    require_demo_mode("Demo workflow")
+    nodes = [dict(node) for node in DEMO_PIPELINE]
+    flaky = next(node for node in nodes if node["key"] == "metadata")
+    flaky["fail_once"] = True
+    if scenario == "failure":
+        flaky["max_attempts"] = 1
+    name = "document-pipeline" if scenario == "retry" else "document-pipeline (failing)"
+    return store.create_workflow(name, nodes)
 
 @app.post("/demo/reset")
 def reset_demo():

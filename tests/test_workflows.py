@@ -439,3 +439,74 @@ def test_concurrent_successes_and_failures_never_deadlock_or_strand_nodes(monkey
     finally:
         for s in stores:
             s.engine.dispose()
+
+
+
+def drain(store):
+    """Run small- and large-tier workers until neither finds work, making retries eligible."""
+    from datetime import datetime, timezone
+    from worker.main import WorkerService
+
+    workers = [WorkerService(store, f"w-{tier}", tier, renew_interval=60) for tier in ("small", "large")]
+    for _ in range(50):
+        if not any([worker.run_once(delay=False) for worker in workers]):
+            with store.Session.begin() as session:
+                waiting = session.scalars(select(Task).where(Task.next_attempt_at.is_not(None),
+                                                             Task.status == "queued")).all()
+                for task in waiting:  # skip the real backoff wait
+                    task.next_attempt_at = datetime.now(timezone.utc)
+            if not waiting:
+                return
+
+
+@pytest.fixture
+def demo_api(monkeypatch):
+    monkeypatch.setattr(api, "store", SchedulerStore("sqlite:///:memory:"))
+    monkeypatch.setattr(api, "DEMO_MODE", True)
+    api.store.init()
+    return api
+
+
+def test_list_workflows_shows_newest_first_with_node_states(demo_api):
+    import time
+
+    first = demo_api.store.create_workflow("first", PIPELINE)
+    # Order comes from created_at; equal timestamps made an earlier test flaky.
+    time.sleep(0.05)
+    second = demo_api.store.create_workflow("second", DIAMOND)
+    listed = demo_api.list_workflows(limit=20)
+    assert [w["id"] for w in listed] == [second["id"], first["id"]]
+    assert listed[0]["nodes"] == 3 and listed[0]["node_states"] == {"queued": 2, "blocked": 1}
+    assert listed[1]["node_states"] == {"queued": 1, "blocked": 4}
+
+
+def test_retry_demo_recovers_and_completes(demo_api):
+    workflow = demo_api.demo_workflow(scenario="retry")
+    drain(demo_api.store)
+    done = demo_api.get_workflow(workflow["id"])
+    nodes = {n["node_key"]: n for n in done["nodes"]}
+    assert done["status"] == "succeeded"
+    assert nodes["metadata"]["attempt"] == 2 and all(n["status"] == "succeeded" for n in nodes.values())
+
+
+def test_failure_demo_fails_fast(demo_api):
+    workflow = demo_api.demo_workflow(scenario="failure")
+    drain(demo_api.store)
+    done = demo_api.get_workflow(workflow["id"])
+    states = {n["node_key"]: n["status"] for n in done["nodes"]}
+    assert done["status"] == "failed"
+    assert states["parse"] == "succeeded" and states["metadata"] == "failed"
+    assert states["embed"] == states["index"] == "skipped"
+    # chunk ran in parallel with metadata and may finish or be skipped, never stranded.
+    assert states["chunk"] in ("succeeded", "skipped")
+
+
+def test_demo_workflows_and_simulated_failures_need_demo_mode(demo_api, monkeypatch):
+    monkeypatch.setattr(api, "DEMO_MODE", False)
+    with pytest.raises(HTTPException) as error:
+        demo_api.demo_workflow(scenario="retry")
+    assert error.value.status_code == 403
+    with pytest.raises(HTTPException) as error:
+        demo_api.create_workflow(demo_api.WorkflowCreate(name="x", nodes=[
+            {"key": "a", "prompt": "fails on purpose", "fail_once": True}]))
+    assert error.value.status_code == 403
