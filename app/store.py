@@ -166,10 +166,30 @@ class SchedulerStore:
             raise ValueError("retry backoff settings must be positive")
 
     def init(self):
-        Base.metadata.create_all(self.engine)
+        self._create_tables()
         self._migrate_task_columns()
         self._migrate_workflow_columns()
         self._ensure_task_indexes()
+
+    def _create_tables(self, attempts: int = 5) -> None:
+        """Create missing tables, tolerating other processes doing the same.
+
+        The API and every worker call init() at boot. On a fresh database each
+        can see no tables and then race to create them; the losers hit
+        'already exists'. Retrying is safe because create_all skips tables that
+        exist by then, which is the same race the column migration tolerates.
+        """
+        for attempt in range(attempts):
+            try:
+                Base.metadata.create_all(self.engine)
+                return
+            except (OperationalError, ProgrammingError, IntegrityError) as exc:
+                message = str(exc).lower()
+                # PostgreSQL can also report the race as a duplicate pg_type key.
+                if "already exists" not in message and "duplicate key" not in message:
+                    raise
+                if attempt == attempts - 1:
+                    raise
 
     def _ensure_task_indexes(self) -> None:
         """Add indexes that databases created by earlier versions are missing."""

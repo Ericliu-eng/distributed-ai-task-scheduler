@@ -68,3 +68,30 @@ def test_startup_migrates_existing_mvp_database(tmp_path):
     indexes = {index["name"] for index in inspect(store.engine).get_indexes("tasks")}
     assert "ux_tasks_workflow_node" in indexes
     assert {"workflows", "task_dependencies"}.issubset(inspect(store.engine).get_table_names())
+
+
+def _init_store(url, start):
+    from app.store import SchedulerStore
+
+    start.wait(timeout=30)
+    SchedulerStore(url).init()
+
+
+def test_processes_starting_together_on_a_fresh_database_all_initialize(tmp_path):
+    """The API and every worker run init() at boot, often at the same moment.
+
+    Each process sees no tables, then all of them try to create them; every
+    process except the first used to crash with 'table ... already exists'.
+    """
+    import multiprocessing
+
+    for attempt in range(3):
+        url = f"sqlite:///{(tmp_path / f'fresh-{attempt}.db').as_posix()}"
+        context = multiprocessing.get_context("spawn")
+        start = context.Barrier(4)
+        processes = [context.Process(target=_init_store, args=(url, start)) for _ in range(4)]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=60)
+        assert [process.exitcode for process in processes] == [0, 0, 0, 0]
