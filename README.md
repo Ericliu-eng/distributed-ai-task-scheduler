@@ -16,7 +16,7 @@ A multi-worker inference scheduler that routes each request to a small or large 
 | What | Result | Conditions |
 | --- | --- | --- |
 | Queue throughput | **683 tasks/s, 0 duplicate claims** across 1,000 tasks | 8 workers, PostgreSQL 16, mock inference, median of 3 runs · [details](docs/BENCHMARKS.md#queue-throughput) |
-| Round-trip optimization | **3–7x higher throughput**, 1,241 tasks/s with 16 workers | Profiled first, then cut each task to two statements · [details](docs/BENCHMARKS.md#scaling-with-worker-count) |
+| Round-trip optimization | **2–7x higher throughput** (1.9x at 16 processes, 6.6x at 8 threads), 1,241 tasks/s with 16 workers | Profiled first, then cut each task to two statements · [details](docs/BENCHMARKS.md#scaling-with-worker-count) |
 | DAG workflows | **275–294 tasks/s through 100 five-node pipelines vs 293 with no dependencies**; 400/400 dependents unlocked exactly once | 8 workers, 20 ms per node, median of 3 runs · [details](docs/BENCHMARKS.md#workflows) |
 | Crash recovery | **20 / 20 killed tasks recovered**, every stale write rejected | Short 200 ms test lease · [details](docs/BENCHMARKS.md#crash-recovery) |
 | Cost-aware routing | **100% of all-Sonnet quality at 35% lower cost** | Claude Haiku 4.5 / Sonnet 5.5, 50 graded cases, one sample each · [details](docs/EVALUATION.md) |

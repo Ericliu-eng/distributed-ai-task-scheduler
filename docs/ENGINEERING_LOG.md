@@ -18,6 +18,7 @@ These are problems found while building Orbit. Each one was found by a test, a b
 | 12 | Deadlock between fail-fast and dependency unlocking | Lock-order review, confirmed by a stress test | [#18](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/18) |
 | 13 | Workers crashed when starting together on a fresh database | Running the stack in a browser | [#19](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/19) |
 | 14 | A benchmark hypothesis that turned out wrong | The workflow benchmark | this PR |
+| 15 | A summary number that left out the weakest result | Rechecking numbers before reusing them | this PR |
 
 ## 1. Published numbers that the code did not support
 
@@ -63,7 +64,7 @@ These are problems found while building Orbit. Each one was found by a test, a b
 
 **How it was found.** `cProfile` showed SQLAlchemy compiling the claim on every call: 3.6 ms of client CPU against a 0.5 ms round trip. SQLAlchemy cannot cache PostgreSQL-specific `INSERT … ON CONFLICT`, so the whole statement was rebuilt and recompiled each time.
 
-**Fix.** Both statements are built once with bound parameters. The upsert became a cacheable `UPDATE` plus `INSERT … WHERE NOT EXISTS`. Client CPU per claim fell to 0.4 ms, and a test asserts both statements stay cacheable. With all of rows 6 and 7, throughput rose 3–7x.
+**Fix.** Both statements are built once with bound parameters. The upsert became a cacheable `UPDATE` plus `INSERT … WHERE NOT EXISTS`. Client CPU per claim fell to 0.4 ms, and a test asserts both statements stay cacheable. With all of rows 6 and 7, throughput rose 2–7x (1.9x at 16 processes, 6.6x at 8 threads).
 
 ## 8. Bound parameters named like columns became `SET` values
 
@@ -116,3 +117,11 @@ These are problems found while building Orbit. Each one was found by a test, a b
 **What the measurement showed.** With 100 workflows in flight, the idle poll made no difference (hand-off p50 3 ms at 250, 50, and 10 ms). The queue never empties, and the worker that finishes a node claims its newly queued dependent immediately. The poll only matters on an idle system. With one workflow at a time, a 10 ms poll cut the gap between nodes from about 30 ms to about 6 ms.
 
 **Two explanations were wrong.** The extra critical-path time first looked like Windows `sleep()` overshoot. `sleep()` is accurate to under 1 ms, and the extra time is each node's own claim and write-back. The 50 ms and 250 ms polls also gave nearly the same gap, which looked like workers polling in lockstep. Giving each worker a random start offset barely changed it. What makes the 50 ms poll behave like the 250 ms one is still an open question.
+
+## 15. A summary number that left out the weakest result
+
+**Symptom.** Since [#15](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/15), the README and BENCHMARKS.md summarized the round-trip work as "3–7x higher throughput". The A/B table directly below that sentence showed 1.9x for 16 processes.
+
+**How it was found.** While drafting resume bullets from the saved results, each summary figure was checked against the table it summarizes.
+
+**Fix.** The summary now reads 2–7x and names the low end (1.9x at 16 processes) as well as the high end (6.6x at 8 threads).

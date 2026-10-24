@@ -37,7 +37,7 @@ For contrast, the same 1,000-task workload on SQLite also had zero duplicate cla
 
 ## Scaling with worker count
 
-Cutting per-task round trips raised throughput 3–7x. The fix came from measuring first: profiling showed the database idle while workers waited on their own round trips. Run the matrix against a disposable database:
+Cutting per-task round trips raised throughput 2–7x: 6.6x with 8 threads, 3.6x with 8 processes, 1.9x with 16 processes. The fix came from measuring first: profiling showed the database idle while workers waited on their own round trips. Run the matrix against a disposable database:
 
 ```bash
 BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_benchmark \
