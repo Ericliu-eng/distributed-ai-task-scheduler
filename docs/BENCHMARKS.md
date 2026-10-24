@@ -77,6 +77,43 @@ With 16 processes the optimized runs ranged from 403 to 1,210 tasks/s. At that r
 
 After the change, transactions held open while waiting for the client fell from 37% to 2% of samples with 16 processes. The largest server-side wait is now the WAL flush on commit (`LWLock / WALWrite`, 14% of samples), because every task still commits twice. Possible next steps are batching claims and relying on PostgreSQL group commit; `synchronous_commit = off` would trade durability for speed and is not a default this scheduler should take.
 
+## Workflows
+
+Dependencies cost almost nothing in throughput. 100 five-node pipelines ran at 275–294 tasks/s, against 293 for the same 500 tasks with no dependencies. Every one of the 400 dependent nodes was unlocked exactly once. On an idle system, the worker poll interval decides how long a ready node waits.
+
+```bash
+BENCHMARK_DATABASE_URL=postgresql+psycopg://scheduler:scheduler@localhost:5432/scheduler_benchmark \
+  python -m bench.workflows --allow-reset --output workflows.json
+```
+
+The workload is the document pipeline `parse → chunk / metadata → embed → index`: four levels deep, with one parallel pair. It runs on 8 worker processes with a simulated 20 ms provider call per node, on PostgreSQL 16 in Docker (2026-10-23). Each cell is the median of three runs. Two measurements matter for a DAG:
+
+- **Hand-off latency:** a node's start minus the finish of the upstream node that unlocked it, all from the database clock.
+- **Scheduling gap:** a workflow's span minus the run time of its critical path (the longest chain of node runs, measured). Subtracting measured run time keeps slow provider calls out of the scheduler's account.
+
+### Many workflows at once
+
+| Idle poll | Throughput | Hand-off p50 / p95 | Gap p50 / p95 |
+| ---: | ---: | ---: | ---: |
+| 250 ms | 275 tasks/s | 3 / 26 ms | 20 / 31 ms |
+| 50 ms | 294 tasks/s | 3 / 29 ms | 19 / 34 ms |
+| 10 ms | 290 tasks/s | 3 / 29 ms | 16 / 36 ms |
+| No dependencies (500 independent tasks) | 293 tasks/s | — | — |
+
+Every run finished 100/100 workflows with zero duplicate claims and exactly 400 `unblocked` events, one per dependent node. The poll interval makes no difference under load. The queue never empties, and the worker that finishes a node claims its newly queued dependent immediately. The p95 hand-off is the parallel branch waiting for a second worker that is busy with another workflow.
+
+### One workflow at a time
+
+| Idle poll | Workflow p50 | Critical-path run p50 | Gap p50 / p95 | Hand-off p95 |
+| ---: | ---: | ---: | ---: | ---: |
+| 250 ms | 122 ms | 92 ms | 31 / 33 ms | 28 ms |
+| 50 ms | 123 ms | 92 ms | 31 / 34 ms | 28 ms |
+| 10 ms | 98 ms | 93 ms | 5 / 10 ms | 3 ms |
+
+Workers stay up while 20 workflows run one after another, as a single user would see them. The critical path runs about 92 ms rather than 4 × 20 ms because every node also pays its own claim and write-back. The gap is the parallel branch waiting for a second worker's next poll. A 10 ms poll cuts it to about 5 ms, at the cost of more idle queries. The 50 ms poll behaves like the 250 ms one, and that is not explained yet. Worker poll phases were randomized and `sleep()` is accurate to under 1 ms, so neither of those is the cause; see the [engineering log](ENGINEERING_LOG.md#14-a-benchmark-hypothesis-that-turned-out-wrong). PostgreSQL `LISTEN/NOTIFY` would let an idle worker wake when a node is queued instead of polling. That is the next step if idle latency matters.
+
+The raw results are in [`bench/results/workflows.json`](../bench/results/workflows.json).
+
 ## Crash recovery
 
 Run repeated worker-crash trials against a disposable SQLite database:
