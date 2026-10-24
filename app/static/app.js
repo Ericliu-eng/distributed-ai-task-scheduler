@@ -5,7 +5,7 @@ const esc = (value) => (value ?? '').toString().replace(/[&<>'"]/g, (c) => ({
 const number = (value, digits = 0) => Number(value).toLocaleString(undefined, {maximumFractionDigits: digits});
 const duration = (ms) => ms == null ? '—' : ms < 1000 ? number(ms) + ' ms' : number(ms / 1000, 2) + ' s';
 const titleCase = (value) => value ? value[0].toUpperCase() + value.slice(1) : 'Unknown';
-const stateClasses = new Set(['queued', 'running', 'succeeded', 'failed', 'idle', 'busy', 'offline']);
+const stateClasses = new Set(['queued', 'running', 'succeeded', 'failed', 'blocked', 'skipped', 'idle', 'busy', 'offline']);
 const stateClass = (value) => stateClasses.has(value) ? value : '';
 // SQLite returns UTC timestamps without an offset; PostgreSQL includes one.
 const eventDate = (iso) => new Date(/(?:Z|[+-]\d{2}:\d{2})$/i.test(iso) ? iso : iso + 'Z');
@@ -13,6 +13,8 @@ let currentFilter = 'all';
 let expandedTaskId = null;
 let cachedTasks = [];
 let cachedEvents = [];
+let cachedWorkflows = [];
+let selectedWorkflowId = null;
 let refreshPending = null;
 let toastTimer;
 let submitting = false;
@@ -45,12 +47,15 @@ async function api(path, options = {}) {
 
 const views = {
   overview: ['Inference overview', 'Monitor performance, then drill into individual tasks.'],
+  workflows: ['Workflows', 'Follow multi-step pipelines node by node.'],
   activity: ['Activity', 'Trace routing decisions, retries and recovery events.'],
   benchmarks: ['Benchmarks', 'Review saved measurements and their test conditions.'],
 };
 
 function showView(name) {
   const view = Object.hasOwn(views, name) ? name : 'overview';
+  // Opening the Workflows view refreshes node detail right away instead of on the next poll.
+  if (view === 'workflows' && $('#workflows').hidden) setTimeout(refresh);
   document.querySelectorAll('.view').forEach((section) => { section.hidden = section.id !== view; });
   document.querySelectorAll('[data-view]').forEach((link) => {
     if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
@@ -148,20 +153,25 @@ function renderTasks() {
 
 function renderEvents() {
   const filter = $('#eventFilter').value;
-  const events = cachedEvents.filter((event) => filter === 'all' || (filter === 'issues' ? ['retry', 'failed'].includes(event.kind) : event.kind === 'recovered'));
+  const events = cachedEvents.filter((event) => filter === 'all' || (filter === 'issues' ? ['retry', 'failed', 'skipped', 'workflow_failed'].includes(event.kind) : event.kind === 'recovered'));
   const time = (iso) => eventDate(iso).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-  setHTML('#events', events.length ? events.map((event) => '<div class="event ' + (['retry', 'failed', 'recovered'].includes(event.kind) ? event.kind : '') + '"><time title="' + esc(eventDate(event.created_at).toLocaleString()) + '">' + esc(time(event.created_at)) + '</time><b>' + esc(titleCase(event.kind)) + '</b><span>' + esc(event.message) + '</span></div>').join('') : '<p class="empty">' + (filter === 'all' ? 'No activity yet. Events will appear as tasks are processed.' : 'No matching events in the latest 30 records.') + '</p>');
+  const eventClass = (kind) => ({retry: 'retry', recovered: 'recovered', failed: 'failed', skipped: 'failed', workflow_failed: 'failed'})[kind] || '';
+  setHTML('#events', events.length ? events.map((event) => '<div class="event ' + eventClass(event.kind) + '"><time title="' + esc(eventDate(event.created_at).toLocaleString()) + '">' + esc(time(event.created_at)) + '</time><b>' + esc(titleCase(event.kind.replace('_', ' '))) + '</b><span>' + esc(event.message) + '</span></div>').join('') : '<p class="empty">' + (filter === 'all' ? 'No activity yet. Events will appear as tasks are processed.' : 'No matching events in the latest 30 records.') + '</p>');
 }
 
 function refresh() {
   if (refreshPending) return refreshPending;
   refreshPending = (async () => {
     try {
-      const [metrics, workers, tasks, events] = await Promise.all([
-        api('/metrics/summary'), api('/workers'), api('/tasks'), api('/events'),
+      const [metrics, workers, tasks, events, workflows] = await Promise.all([
+        api('/metrics/summary'), api('/workers'), api('/tasks'), api('/events'), api('/workflows'),
       ]);
       cachedTasks = tasks;
       cachedEvents = events;
+      cachedWorkflows = workflows;
+      renderWorkflowList();
+      // Node-level detail is only fetched while the Workflows view is open.
+      if (!$('#workflows').hidden && selectedWorkflowId) renderWorkflow(await api('/workflows/' + selectedWorkflowId));
       renderMetrics(metrics);
       renderWorkers(workers);
       renderTasks();
@@ -177,6 +187,121 @@ function refresh() {
   })();
   return refreshPending;
 }
+
+const workflowDuration = (workflow) => {
+  const end = workflow.finished_at ? eventDate(workflow.finished_at) : new Date();
+  return duration(Math.max(0, end - eventDate(workflow.created_at)));
+};
+
+function renderWorkflowList() {
+  if (!cachedWorkflows.some((workflow) => workflow.id === selectedWorkflowId)) {
+    selectedWorkflowId = cachedWorkflows[0]?.id ?? null;
+  }
+  $('#workflowCount').textContent = cachedWorkflows.length + (cachedWorkflows.length === 1 ? ' workflow' : ' workflows');
+  setHTML('#workflowList', cachedWorkflows.length ? '<ul class="workflow-list">' + cachedWorkflows.map((workflow) => {
+    const done = workflow.node_states.succeeded || 0;
+    const selected = workflow.id === selectedWorkflowId;
+    return '<li><button class="workflow-item" data-workflow-id="' + esc(workflow.id) + '" aria-pressed="' + selected + '">' +
+      '<span class="workflow-name">' + esc(workflow.name) + '</span>' +
+      '<span class="state ' + stateClass(workflow.status) + '">' + esc(titleCase(workflow.status)) + '</span>' +
+      '<span class="workflow-progress"><span style="width:' + (workflow.nodes ? done / workflow.nodes * 100 : 0) + '%"></span></span>' +
+      '<small>' + done + ' / ' + workflow.nodes + ' nodes succeeded · ' + esc(workflowDuration(workflow)) + ' · ' + esc(workflow.id.slice(0, 8)) + '</small>' +
+      '</button></li>';
+  }).join('') + '</ul>' : '<p class="empty"><strong>No workflows yet</strong>Run the pipeline demo to watch nodes unlock one step at a time.</p>');
+  if (!selectedWorkflowId) {
+    $('#workflowTitle').textContent = 'No workflow selected';
+    $('#workflowMeta').textContent = 'Run the pipeline demo or submit a workflow through the API.';
+    $('#workflowState').innerHTML = '';
+    setHTML('#workflowGraph', '');
+    setHTML('#nodeRows', '<tr><td colspan="6" class="empty">Select a workflow to see its nodes.</td></tr>');
+  }
+}
+
+// Columns follow dependency depth: a node sits one column right of its deepest dependency.
+function dagLayout(nodes) {
+  const node = {width: 168, height: 58, colGap: 64, rowGap: 16, pad: 8};
+  const level = {};
+  nodes.forEach((n) => { level[n.node_key] = n.depends_on.length ? 1 + Math.max(...n.depends_on.map((key) => level[key])) : 0; });
+  const columns = [];
+  nodes.forEach((n) => { (columns[level[n.node_key]] ??= []).push(n); });
+  const rows = Math.max(...columns.map((column) => column.length));
+  const height = node.pad * 2 + rows * node.height + (rows - 1) * node.rowGap;
+  const width = node.pad * 2 + columns.length * node.width + (columns.length - 1) * node.colGap;
+  const at = {};
+  columns.forEach((column, index) => {
+    const used = column.length * node.height + (column.length - 1) * node.rowGap;
+    column.forEach((n, row) => {
+      at[n.node_key] = {x: node.pad + index * (node.width + node.colGap), y: (height - used) / 2 + row * (node.height + node.rowGap)};
+    });
+  });
+  return {node, width, height, at};
+}
+
+function renderWorkflow(workflow) {
+  if (workflow.id !== selectedWorkflowId) return;
+  const {node, width, height, at} = dagLayout(workflow.nodes);
+  const byKey = Object.fromEntries(workflow.nodes.map((n) => [n.node_key, n]));
+  const counts = workflow.nodes.reduce((all, n) => ({...all, [n.status]: (all[n.status] || 0) + 1}), {});
+  const summary = Object.entries(counts).map(([status, count]) => count + ' ' + status).join(', ');
+  $('#workflowTitle').textContent = workflow.name;
+  $('#workflowMeta').textContent = workflow.nodes.length + ' nodes · ' + workflowDuration(workflow) + (workflow.finished_at ? '' : ' so far') + ' · ' + workflow.id.slice(0, 8);
+  $('#workflowState').innerHTML = '<span class="state ' + stateClass(workflow.status) + '">' + esc(titleCase(workflow.status)) + '</span>';
+  const edges = workflow.nodes.flatMap((n) => n.depends_on.map((key) => {
+    const from = at[key], to = at[n.node_key];
+    const x1 = from.x + node.width, y1 = from.y + node.height / 2, x2 = to.x - 4, y2 = to.y + node.height / 2;
+    const done = byKey[key].status === 'succeeded';
+    return '<path class="dag-edge' + (done ? ' done' : '') + '" marker-end="url(#' + (done ? 'arrow-done' : 'arrow') + ')" d="M' + x1 + ' ' + y1 + ' C' + (x1 + node.colGap / 2) + ' ' + y1 + ' ' + (x2 - node.colGap / 2) + ' ' + y2 + ' ' + x2 + ' ' + y2 + '"/>';
+  }));
+  const boxes = workflow.nodes.map((n) => {
+    const p = at[n.node_key];
+    const meta = titleCase(n.status) + ' · ' + titleCase(n.route_tier) + ' · ' + n.attempt + '/' + n.max_attempts;
+    return '<g class="dag-node s-' + esc(n.status) + '" transform="translate(' + p.x + ' ' + p.y + ')"><title>' + esc(n.node_key + ': ' + n.prompt) + '</title>' +
+      '<rect width="' + node.width + '" height="' + node.height + '" rx="8"/>' +
+      '<text class="dag-label" x="12" y="24">' + esc(n.node_key) + '</text>' +
+      '<text class="dag-meta" x="12" y="44">' + esc(meta) + '</text></g>';
+  });
+  // Scales down to the panel; below the CSS min-width it scrolls instead of shrinking text further.
+  setHTML('#workflowGraph', '<svg class="dag" viewBox="0 0 ' + width + ' ' + height + '" style="max-width:' + width + 'px" role="img" aria-label="' + esc(workflow.name + ' graph: ' + summary) + '">' +
+    '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="dag-arrow"/></marker>' +
+    '<marker id="arrow-done" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="dag-arrow done"/></marker></defs>' +
+    edges.join('') + boxes.join('') + '</svg>');
+  setHTML('#nodeRows', workflow.nodes.map((n) => {
+    const total = n.queue_ms != null && n.run_ms != null ? n.queue_ms + n.run_ms : null;
+    return '<tr><td><b>' + esc(n.node_key) + '</b><div class="task-id" title="' + esc(n.prompt) + '">' + esc(n.prompt) + '</div></td>' +
+      '<td><span class="state ' + stateClass(n.status) + '">' + esc(titleCase(n.status)) + '</span>' + (n.error ? '<div class="node-error">' + esc(n.error) + '</div>' : '') + '</td>' +
+      '<td>' + (n.depends_on.length ? esc(n.depends_on.join(', ')) : '<span class="quiet-label">None</span>') + '</td>' +
+      '<td class="tier">' + esc(titleCase(n.route_tier)) + '</td><td class="mono">' + n.attempt + ' / ' + n.max_attempts + '</td><td class="mono">' + duration(total) + '</td></tr>';
+  }).join(''));
+}
+
+$('#workflowList').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-workflow-id]');
+  if (!button || button.dataset.workflowId === selectedWorkflowId) return;
+  selectedWorkflowId = button.dataset.workflowId;
+  renderWorkflowList();
+  try { renderWorkflow(await api('/workflows/' + selectedWorkflowId)); }
+  catch (error) { toast('Could not load the workflow. Check the API connection.'); }
+});
+
+async function startDemoWorkflow(scenario, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Starting…';
+  try {
+    const workflow = await api('/demo/workflow?scenario=' + scenario, {method: 'POST'});
+    selectedWorkflowId = workflow.id;
+    navigate('workflows');
+    await refresh();
+    toast((scenario === 'failure' ? 'Failing pipeline' : 'Pipeline') + ' started · ' + workflow.nodes.length + ' nodes');
+  } catch (error) {
+    toast('Could not start the pipeline. Check the API connection.');
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+$('#pipelineDemoBtn').addEventListener('click', (event) => startDemoWorkflow('retry', event.currentTarget));
+$('#failingDemoBtn').addEventListener('click', (event) => startDemoWorkflow('failure', event.currentTarget));
 
 function renderPerformance(report) {
   $('#perfDatabase').textContent = report.database;
@@ -368,6 +493,7 @@ showView(location.hash.slice(1));
 api('/health').then((health) => {
   if (health.demo_mode === false) {
     $('#demoBtn').hidden = true;
+    $('#workflowDemoActions').hidden = true;
     $('#failOnce').checked = false;
     $('#failOnce').closest('label').hidden = true;
   }

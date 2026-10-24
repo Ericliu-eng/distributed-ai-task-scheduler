@@ -288,3 +288,57 @@ dialog p { font-size: 13px; line-height: 1.7; color: var(--muted); margin: 12px 
   .table-footer, .page-footer { flex-wrap: wrap; gap: 6px 16px; }
   .dialog-actions { flex-wrap: wrap; }
 }
+
+/* Workflows */
+.state.blocked, .state.skipped { color: var(--muted); }
+.state.queued { color: var(--amber); }
+.workflow-toolbar { align-items: center; margin-bottom: 16px; }
+.workflow-toolbar .section-description { max-width: 620px; margin: 0; }
+.workflow-grid { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.workflow-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.workflow-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
+.workflow-item:hover { background: var(--soft); }
+.workflow-item[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.workflow-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-item small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+.workflow-progress { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--soft); overflow: hidden; }
+.workflow-progress span { display: block; height: 100%; background: var(--green); transition: width .4s ease; }
+.workflow-detail .panel-head { align-items: flex-start; }
+.dag-wrap { overflow-x: auto; padding: 8px 0 4px; }
+.dag { display: block; margin: 0 auto; width: 100%; height: auto; min-width: 560px; }
+.dag-node rect { fill: #f7f8fa; stroke: #c5ccd6; stroke-width: 1.25; }
+.dag-label { font-size: 13px; font-weight: 600; fill: var(--text); }
+.dag-meta { font-size: 11px; fill: var(--muted); }
+.dag-node.s-blocked rect { stroke-dasharray: 4 3; }
+.dag-node.s-queued rect { fill: #fdf6ec; stroke: var(--amber); }
+.dag-node.s-running rect { fill: #eef3fd; stroke: var(--accent); stroke-width: 2; animation: dag-pulse 1.4s ease-in-out infinite; }
+.dag-node.s-succeeded rect { fill: #edf6f1; stroke: var(--green); }
+.dag-node.s-failed rect { fill: #fbefef; stroke: var(--red); stroke-width: 2; }
+.dag-node.s-skipped rect { fill: #f3f4f6; stroke: #d3d7de; stroke-dasharray: 2 3; }
+.dag-node.s-skipped .dag-label { fill: var(--muted); text-decoration: line-through; }
+.dag-node.s-failed .dag-meta { fill: var(--red); }
+.dag-node.s-succeeded .dag-meta { fill: var(--green); }
+.dag-node.s-running .dag-meta { fill: var(--accent); }
+.dag-node.s-queued .dag-meta { fill: var(--amber); }
+.dag-edge { fill: none; stroke: #b7bfcb; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.dag-edge.done { stroke: var(--green); stroke-dasharray: none; }
+.dag-arrow { fill: #b7bfcb; }
+.dag-arrow.done { fill: var(--green); }
+@keyframes dag-pulse { 50% { stroke-opacity: .35; } }
+.dag-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 14px; font-size: 11px; color: var(--muted); }
+.dag-key-item::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; border: 1.5px solid #c5ccd6; background: #f7f8fa; }
+.dag-key-item.s-blocked::before { border-style: dashed; }
+.dag-key-item.s-queued::before { border-color: var(--amber); background: #fdf6ec; }
+.dag-key-item.s-running::before { border-color: var(--accent); background: #eef3fd; }
+.dag-key-item.s-succeeded::before { border-color: var(--green); background: #edf6f1; }
+.dag-key-item.s-failed::before { border-color: var(--red); background: #fbefef; }
+.dag-key-item.s-skipped::before { border-style: dotted; background: #f3f4f6; }
+.node-table td { vertical-align: top; }
+.node-table .task-id { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-error { color: var(--muted); font-size: 11px; margin-top: 2px; }
+@media (prefers-reduced-motion: reduce) { .dag-node.s-running rect { animation: none; } .workflow-progress span { transition: none; } }
+@media (max-width: 1000px) { .workflow-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 800px) {
+  .workflow-toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .workflow-toolbar .page-actions { flex-wrap: wrap; }
+}

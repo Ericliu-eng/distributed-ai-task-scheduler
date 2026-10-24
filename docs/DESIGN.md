@@ -68,7 +68,7 @@ curl http://localhost:8000/benchmarks/routing
 
 `GET /metrics/timeseries?minutes=15` reconstructs 30 intervals from persisted task events and completion timestamps. The dashboard refreshes these trends every five seconds. Queue pressure shows each interval's peak queued and running counts; completion rate counts successful tasks per minute. Latency measures creation to successful completion, including retry and recovery waits. Intervals without completions have no latency sample. These live trends are separate from the saved benchmark reports.
 
-### Workflows (in progress)
+### Workflows
 
 `POST /workflows` submits a DAG of tasks. Each node is routed like a standalone task, and lists the nodes it depends on:
 
@@ -95,7 +95,7 @@ curl http://localhost:8000/workflows/{workflow_id}
 - **Completion:** each workflow counts the nodes that have not succeeded; the success that reaches zero marks it `succeeded`, for the same lost-wake-up reason as unlocking. A test forces both final write-backs to snapshot before either commits. A naive "am I the last node?" check leaves the workflow running forever; the countdown completes it exactly once.
 - **Lock order:** a failure and a concurrent success both update task rows and the workflow row. Every path locks task rows first, in id order, then the workflow row, so the two never wait on each other in opposite orders. A stress test reports 8 results at once, one of them a failure, in a 20-node workflow. Locking the workflow row first produced `DeadlockDetected`; the fixed order has not, and no node was left blocked or queued.
 
-**Not finished yet:** the dashboard does not show workflows yet.
+`GET /workflows` lists recent workflows with how many nodes are in each state. In demo mode, `POST /demo/workflow?scenario=retry` submits the five-node document pipeline with one node that fails once and recovers; `scenario=failure` makes that node fail on its only attempt, so the workflow fails fast.
 
 Interactive API documentation is served at `/docs`.
 
@@ -105,7 +105,8 @@ Interactive API documentation is served at `/docs`.
 2. In **Overview**, check current status, then inspect completion rate, queue pressure, and p50/p95 end-to-end latency over the last 5, 15, or 60 minutes. Expand a task with **+** to inspect its routing reason, attempts, and result.
 3. Search by prompt or task ID, or filter the queue by status to focus on active or failed work.
 4. Switch to **Activity** and select **Retries & failures** to find the simulated failure; its task succeeds on attempt 2.
-5. Review model distribution and estimated savings in the routing summary, then open **Benchmarks** for saved queue, crash-recovery, and Claude routing-evaluation reports.
+5. Open **Workflows** and click **Run pipeline demo**. Nodes unlock column by column; `metadata` fails once, retries, and the workflow succeeds. Click **Run failing pipeline** to watch fail-fast: `metadata` fails, and every node that has not started is skipped. The table under the graph lists each node's state, dependencies, and attempts.
+6. Review model distribution and estimated savings in the routing summary, then open **Benchmarks** for saved queue, crash-recovery, and Claude routing-evaluation reports.
 
 ## Tests
 
