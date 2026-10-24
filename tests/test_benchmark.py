@@ -58,3 +58,32 @@ def test_scaling_matrix_reports_median_and_efficiency(tmp_path):
     assert all(len(cell["throughput_runs"]) == 2 for cell in cells)
     assert all(cell["duplicate_claims"] == 0 for cell in cells)
     assert cells[0]["scaling_efficiency_pct"] == 100.0
+
+
+def test_workflow_benchmark_runs_every_pipeline_and_checks_itself(tmp_path):
+    from bench.workflows import run_workflow_benchmark
+
+    database_url = f"sqlite:///{(tmp_path / 'workflows.db').as_posix()}"
+    result = run_workflow_benchmark(database_url, workflows=4, workers=2, work_ms=5, poll_ms=10)
+
+    assert result["nodes"] == 20 and result["workflows_succeeded"] == 4
+    assert result["duplicate_claims"] == 0
+    # Every non-root node is unlocked exactly once.
+    assert result["unblocked_events"] == result["edges_waiting_on_upstream"] == 16
+    assert sum(result["worker_completions"]) == 20
+    assert result["handoff_latency_ms"]["p50"] >= 0
+    # A workflow never finishes faster than its measured critical path; the rest is gaps.
+    assert result["workflow_duration_ms"]["p50"] >= result["critical_path_run_ms"]["p50"]
+    assert result["scheduling_gap_ms"]["p50"] >= 0
+
+
+def test_latency_benchmark_runs_workflows_one_at_a_time(tmp_path):
+    from bench.workflows import run_latency_benchmark
+
+    database_url = f"sqlite:///{(tmp_path / 'latency.db').as_posix()}"
+    result = run_latency_benchmark(database_url, workflows=3, workers=2, work_ms=5, poll_ms=10)
+
+    # A workflow never finishes faster than its measured critical path; the rest is gaps.
+    assert result["workflow_duration_ms"]["p50"] >= result["critical_path_run_ms"]["p50"]
+    assert result["scheduling_gap_ms"]["p50"] >= 0
+    assert result["handoff_latency_ms"]["p50"] >= 0

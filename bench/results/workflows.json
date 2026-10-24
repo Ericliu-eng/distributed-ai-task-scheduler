@@ -1,0 +1,277 @@
+{
+  "measured_at": "2026-10-24T02:42:13.318167+00:00",
+  "python": "3.11.0",
+  "platform": "Windows-10-10.0.26300-SP0",
+  "worker_mode": "one operating-system process per worker",
+  "workload": "100 five-node document pipelines submitted at once, tiers pinned per workflow",
+  "repeats": 3,
+  "method": "each cell is the run with the median tasks/s; hand-off latency is a node's start minus the finish of the upstream that unlocked it, all from the database clock",
+  "cells": [
+    {
+      "workflows": 100,
+      "nodes": 500,
+      "workers": 8,
+      "work_ms": 20.0,
+      "idle_poll_ms": 250.0,
+      "workflows_succeeded": 100,
+      "duplicate_claims": 0,
+      "unblocked_events": 400,
+      "edges_waiting_on_upstream": 400,
+      "worker_completions": [
+        61,
+        65,
+        62,
+        67,
+        66,
+        57,
+        61,
+        61
+      ],
+      "makespan_seconds": 1.818,
+      "tasks_per_second": 275.0,
+      "workflows_per_second": 55.0,
+      "handoff_latency_ms": {
+        "p50": 2.54,
+        "p95": 26.37,
+        "p99": 28.26
+      },
+      "workflow_duration_ms": {
+        "p50": 112.21,
+        "p95": 127.22,
+        "p99": 144.88
+      },
+      "critical_path_run_ms": {
+        "p50": 91.84,
+        "p95": 101.86,
+        "p99": 107.13
+      },
+      "scheduling_gap_ms": {
+        "p50": 20.44,
+        "p95": 31.12,
+        "p99": 39.17
+      },
+      "tasks_per_second_runs": [
+        271.5,
+        283.3,
+        275.0
+      ],
+      "handoff_p50_runs": [
+        2.71,
+        2.7,
+        2.54
+      ],
+      "all_runs_correct": true
+    },
+    {
+      "workflows": 100,
+      "nodes": 500,
+      "workers": 8,
+      "work_ms": 20.0,
+      "idle_poll_ms": 50.0,
+      "workflows_succeeded": 100,
+      "duplicate_claims": 0,
+      "unblocked_events": 400,
+      "edges_waiting_on_upstream": 400,
+      "worker_completions": [
+        63,
+        60,
+        65,
+        62,
+        62,
+        65,
+        60,
+        63
+      ],
+      "makespan_seconds": 1.702,
+      "tasks_per_second": 293.7,
+      "workflows_per_second": 58.7,
+      "handoff_latency_ms": {
+        "p50": 2.59,
+        "p95": 28.85,
+        "p99": 30.29
+      },
+      "workflow_duration_ms": {
+        "p50": 111.79,
+        "p95": 130.27,
+        "p99": 174.22
+      },
+      "critical_path_run_ms": {
+        "p50": 94.11,
+        "p95": 102.94,
+        "p99": 105.2
+      },
+      "scheduling_gap_ms": {
+        "p50": 19.09,
+        "p95": 34.21,
+        "p99": 71.36
+      },
+      "tasks_per_second_runs": [
+        294.8,
+        290.8,
+        293.7
+      ],
+      "handoff_p50_runs": [
+        2.76,
+        2.59,
+        2.59
+      ],
+      "all_runs_correct": true
+    },
+    {
+      "workflows": 100,
+      "nodes": 500,
+      "workers": 8,
+      "work_ms": 20.0,
+      "idle_poll_ms": 10.0,
+      "workflows_succeeded": 100,
+      "duplicate_claims": 0,
+      "unblocked_events": 400,
+      "edges_waiting_on_upstream": 400,
+      "worker_completions": [
+        62,
+        63,
+        63,
+        62,
+        63,
+        63,
+        62,
+        62
+      ],
+      "makespan_seconds": 1.723,
+      "tasks_per_second": 290.2,
+      "workflows_per_second": 58.0,
+      "handoff_latency_ms": {
+        "p50": 2.87,
+        "p95": 29.47,
+        "p99": 35.62
+      },
+      "workflow_duration_ms": {
+        "p50": 119.02,
+        "p95": 133.19,
+        "p99": 194.83
+      },
+      "critical_path_run_ms": {
+        "p50": 94.68,
+        "p95": 108.04,
+        "p99": 110.29
+      },
+      "scheduling_gap_ms": {
+        "p50": 15.51,
+        "p95": 35.56,
+        "p99": 86.79
+      },
+      "tasks_per_second_runs": [
+        290.2,
+        287.3,
+        290.3
+      ],
+      "handoff_p50_runs": [
+        2.87,
+        2.92,
+        2.79
+      ],
+      "all_runs_correct": true
+    }
+  ],
+  "one_at_a_time": [
+    {
+      "workflows": 20,
+      "workers": 8,
+      "work_ms": 20.0,
+      "idle_poll_ms": 250.0,
+      "handoff_latency_ms": {
+        "p50": 2.48,
+        "p95": 27.54,
+        "p99": 28.87
+      },
+      "workflow_duration_ms": {
+        "p50": 122.17,
+        "p95": 132.96,
+        "p99": 133.81
+      },
+      "critical_path_run_ms": {
+        "p50": 91.96,
+        "p95": 104.96,
+        "p99": 105.06
+      },
+      "scheduling_gap_ms": {
+        "p50": 30.8,
+        "p95": 33.38,
+        "p99": 34.26
+      },
+      "duration_p50_runs": [
+        123.29,
+        121.47,
+        122.17
+      ]
+    },
+    {
+      "workflows": 20,
+      "workers": 8,
+      "work_ms": 20.0,
+      "idle_poll_ms": 50.0,
+      "handoff_latency_ms": {
+        "p50": 2.39,
+        "p95": 27.5,
+        "p99": 29.04
+      },
+      "workflow_duration_ms": {
+        "p50": 123.39,
+        "p95": 139.95,
+        "p99": 140.67
+      },
+      "critical_path_run_ms": {
+        "p50": 92.0,
+        "p95": 112.11,
+        "p99": 117.03
+      },
+      "scheduling_gap_ms": {
+        "p50": 31.12,
+        "p95": 33.84,
+        "p99": 34.48
+      },
+      "duration_p50_runs": [
+        123.39,
+        123.43,
+        121.88
+      ]
+    },
+    {
+      "workflows": 20,
+      "workers": 8,
+      "work_ms": 20.0,
+      "idle_poll_ms": 10.0,
+      "handoff_latency_ms": {
+        "p50": 1.84,
+        "p95": 3.2,
+        "p99": 5.78
+      },
+      "workflow_duration_ms": {
+        "p50": 98.16,
+        "p95": 131.35,
+        "p99": 133.3
+      },
+      "critical_path_run_ms": {
+        "p50": 92.79,
+        "p95": 123.4,
+        "p99": 125.45
+      },
+      "scheduling_gap_ms": {
+        "p50": 5.35,
+        "p95": 9.67,
+        "p99": 13.26
+      },
+      "duration_p50_runs": [
+        98.69,
+        98.16,
+        96.9
+      ]
+    }
+  ],
+  "standalone_baseline_tasks_per_second": 293.0,
+  "standalone_runs": [
+    298.92,
+    292.99,
+    292.86
+  ]
+}
