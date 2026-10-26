@@ -16,7 +16,8 @@ A multi-worker inference scheduler that routes each request to a small or large 
 | What | Result | Conditions |
 | --- | --- | --- |
 | Queue throughput | **683 tasks/s, 0 duplicate claims** across 1,000 tasks | 8 workers, PostgreSQL 16, mock inference, median of 3 runs · [details](docs/BENCHMARKS.md#queue-throughput) |
-| Round-trip optimization | **3–7x higher throughput**, 1,241 tasks/s with 16 workers | Profiled first, then cut each task to two statements · [details](docs/BENCHMARKS.md#scaling-with-worker-count) |
+| Round-trip optimization | **2–7x higher throughput** (1.9x at 16 processes, 6.6x at 8 threads), 1,241 tasks/s with 16 workers | Profiled first, then cut each task to two statements · [details](docs/BENCHMARKS.md#scaling-with-worker-count) |
+| DAG workflows | **275–294 tasks/s through 100 five-node pipelines vs 293 with no dependencies**; 400/400 dependents unlocked exactly once | 8 workers, 20 ms per node, median of 3 runs · [details](docs/BENCHMARKS.md#workflows) |
 | Crash recovery | **20 / 20 killed tasks recovered**, every stale write rejected | Short 200 ms test lease · [details](docs/BENCHMARKS.md#crash-recovery) |
 | Cost-aware routing | **100% of all-Sonnet quality at 35% lower cost** | Claude Haiku 4.5 / Sonnet 5.5, 50 graded cases, one sample each · [details](docs/EVALUATION.md) |
 
@@ -26,6 +27,7 @@ A multi-worker inference scheduler that routes each request to a small or large 
 - **Exactly-one claim:** workers take tasks with `SELECT … FOR UPDATE SKIP LOCKED`, ordered by priority. On PostgreSQL the claim and the write-back are one statement each, so a task costs two round trips.
 - **Leases and recovery:** a claim holds a 15 s lease renewed every 3 s; a monitor requeues tasks whose lease expires.
 - **Fencing:** every write-back must match the current attempt number, so a dead or slow worker cannot overwrite newer work.
+- **DAG workflows:** submit a graph of tasks; Kahn's algorithm rejects cycles before anything is written. A node runs once every dependency succeeds, through a per-node countdown that two upstreams finishing at the same moment cannot skip. A permanent failure fails the workflow fast and skips every node that has not started.
 - **Retries and idempotency:** provider failures retry with jittered exponential backoff (0.5–1 s, then 1–2 s, within 3 attempts; capped at 30 s); idempotency keys deduplicate submissions.
 
 More in [docs/DESIGN.md](docs/DESIGN.md): failure semantics, the API, and known limitations.
@@ -67,7 +69,8 @@ CI also runs the PostgreSQL concurrency suite, including eight workers draining 
 | Architecture and routing policy | [docs/DESIGN.md](docs/DESIGN.md#why-this-design) |
 | Failure semantics | [docs/DESIGN.md#failure-semantics](docs/DESIGN.md#failure-semantics) |
 | API and dashboard | [docs/DESIGN.md#api](docs/DESIGN.md#api), [dashboard walkthrough](docs/DESIGN.md#dashboard-walkthrough) |
-| Queue throughput and crash recovery | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) |
+| Queue throughput, scaling, workflows, and crash recovery | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) |
+| Bugs found and fixed, and how | [docs/ENGINEERING_LOG.md](docs/ENGINEERING_LOG.md) |
 | Routing cost-quality evaluation | [docs/EVALUATION.md](docs/EVALUATION.md) |
 | Tests and CI | [docs/DESIGN.md#tests](docs/DESIGN.md#tests) |
 | Limitations and next steps | [docs/DESIGN.md#known-limitations-and-next-steps](docs/DESIGN.md#known-limitations-and-next-steps) |
