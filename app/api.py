@@ -2,13 +2,14 @@ from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from sqlalchemy import text
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.dag import MAX_NODES, DagError
+from app.limits import RateLimiter
 from app.store import IdempotencyConflict, SchedulerStore
 from app.benchmarks import load_result
 from app.telemetry import timeseries
@@ -19,9 +20,35 @@ store = SchedulerStore()
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() not in {"0", "false", "no"}
 
 
+# Public-demo guards. All are off unless set, so local runs behave as before.
+_per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", "0"))
+RATE_LIMITER = RateLimiter(_per_minute) if _per_minute > 0 else None
+# Reject new work while this many tasks are queued, running, or blocked (0 = no cap).
+MAX_ACTIVE_TASKS = int(os.getenv("MAX_ACTIVE_TASKS", "0"))
+# A shared public demo should not let one visitor wipe what others are watching.
+ALLOW_DEMO_RESET = os.getenv("ALLOW_DEMO_RESET", "true").lower() not in {"0", "false", "no"}
+
+
 def require_demo_mode(feature: str) -> None:
     if not DEMO_MODE:
         raise HTTPException(403, f"{feature} is only available when DEMO_MODE is enabled")
+
+
+def guard_submission(request: Request) -> None:
+    """Rate-limit and cap every endpoint that creates work.
+
+    The client address is the socket peer, or the proxy's X-Forwarded-For
+    when uvicorn runs with --proxy-headers behind a trusted proxy.
+    """
+    if RATE_LIMITER is not None:
+        client = request.client.host if request.client else "unknown"
+        wait = RATE_LIMITER.acquire(client)
+        if wait:
+            raise HTTPException(429, "Too many submissions; try again shortly",
+                                headers={"Retry-After": str(max(1, round(wait)))})
+    if MAX_ACTIVE_TASKS and store.count_active() >= MAX_ACTIVE_TASKS:
+        raise HTTPException(503, "The demo queue is full; try again in a minute",
+                            headers={"Retry-After": "30"})
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -59,7 +86,7 @@ def dashboard():
 def health():
     worker_rows = store.list_workers()
     return {"status": "ok", "workers": sum(w["status"] != "offline" for w in worker_rows),
-            "demo_mode": DEMO_MODE}
+            "demo_mode": DEMO_MODE, "demo_reset": DEMO_MODE and ALLOW_DEMO_RESET}
 
 @app.get("/healthz")
 def healthz():
@@ -76,7 +103,7 @@ def readyz():
         raise HTTPException(503, "database unavailable") from exc
     return {"status": "ready"}
 
-@app.post("/tasks", status_code=201)
+@app.post("/tasks", status_code=201, dependencies=[Depends(guard_submission)])
 def create_task(payload: TaskCreate, response: Response):
     if payload.fail_once:
         require_demo_mode("Simulated failure")
@@ -89,7 +116,7 @@ def create_task(payload: TaskCreate, response: Response):
     return {"task_id": task["id"], "status": task["status"], "route_tier": task["route_tier"],
             "route_reason": task["route_reason"], "created": created}
 
-@app.post("/workflows", status_code=201)
+@app.post("/workflows", status_code=201, dependencies=[Depends(guard_submission)])
 def create_workflow(payload: WorkflowCreate):
     """Submit a DAG of tasks; nodes run only after every dependency succeeds."""
     if any(node.fail_once for node in payload.nodes):
@@ -150,7 +177,7 @@ DEMO_PIPELINE = [
     {"key": "index", "prompt": "Write the embeddings and metadata to the vector index.", "depends_on": ["embed"]},
 ]
 
-@app.post("/demo/workflow", status_code=201)
+@app.post("/demo/workflow", status_code=201, dependencies=[Depends(guard_submission)])
 def demo_workflow(scenario: str = Query("retry", pattern="^(retry|failure)$")):
     """Submit the document pipeline. ``retry``: metadata fails once, then recovers.
     ``failure``: metadata fails on its only attempt, so the workflow fails fast."""
@@ -163,9 +190,11 @@ def demo_workflow(scenario: str = Query("retry", pattern="^(retry|failure)$")):
     name = "document-pipeline" if scenario == "retry" else "document-pipeline (failing)"
     return store.create_workflow(name, nodes)
 
-@app.post("/demo/reset")
+@app.post("/demo/reset", dependencies=[Depends(guard_submission)])
 def reset_demo():
     require_demo_mode("Demo reset")
+    if not ALLOW_DEMO_RESET:
+        raise HTTPException(403, "Demo reset is disabled on this shared deployment")
     store.reset()
     demo = [
         ("Explain why database indexes speed up reads.", "standard", 5, False),

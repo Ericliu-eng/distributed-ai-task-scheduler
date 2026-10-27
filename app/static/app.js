@@ -491,6 +491,8 @@ document.addEventListener('keydown', (event) => {
 showView(location.hash.slice(1));
 // Hide demo-only controls when the API runs with DEMO_MODE=false.
 api('/health').then((health) => {
+  // The destructive reset is off on shared deployments; pipeline demos stay.
+  if (health.demo_reset === false) $('#demoBtn').hidden = true;
   if (health.demo_mode === false) {
     $('#demoBtn').hidden = true;
     $('#workflowDemoActions').hidden = true;
