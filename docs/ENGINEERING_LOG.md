@@ -17,8 +17,9 @@ These are problems found while building Orbit. Each one was found by a test, a b
 | 11 | New column broke older code during a rolling upgrade | Benchmarking `main` against the new schema | [#17](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/17) |
 | 12 | Deadlock between fail-fast and dependency unlocking | Lock-order review, confirmed by a stress test | [#18](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/18) |
 | 13 | Workers crashed when starting together on a fresh database | Running the stack in a browser | [#19](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/19) |
-| 14 | A benchmark hypothesis that turned out wrong | The workflow benchmark | this PR |
-| 15 | A summary number that left out the weakest result | Rechecking numbers before reusing them | this PR |
+| 14 | A benchmark hypothesis that turned out wrong | The workflow benchmark | [#20](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/20) |
+| 15 | A summary number that left out the weakest result | Rechecking numbers before reusing them | [#20](https://github.com/Ericliu-eng/distributed-ai-task-scheduler/pull/20) |
+| 16 | The EC2 boot script would have been checked out with CRLF | A Git line-ending warning, then a fresh checkout | this PR |
 
 ## 1. Published numbers that the code did not support
 
@@ -125,3 +126,11 @@ These are problems found while building Orbit. Each one was found by a test, a b
 **How it was found.** While drafting resume bullets from the saved results, each summary figure was checked against the table it summarizes.
 
 **Fix.** The summary now reads 2–7x and names the low end (1.9x at 16 processes) as well as the high end (6.6x at 8 threads).
+
+## 16. The EC2 boot script would have been checked out with CRLF
+
+**How it was found.** Committing the deployment files printed Git's warning that LF would be replaced by CRLF. That alone proves nothing, so a fresh checkout of the commit was inspected. All 34 lines of `bootstrap.sh.tftpl` ended in a carriage return.
+
+**Root cause.** The repository is used on Windows with `core.autocrlf=true`, and Terraform reads the boot script from that working copy before sending it to the instance as user data. On Linux, bash would fail on every line with `$'': command not found`. The instance would have booted with nothing running, and no error would have shown until the site failed to load.
+
+**Fix.** A `.gitattributes` file forces LF for shell scripts, Terraform templates, the Caddyfile, and the Dockerfile. A fresh checkout now has no carriage returns. This was caught before anything was deployed.
