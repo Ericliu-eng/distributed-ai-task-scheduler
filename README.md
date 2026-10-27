@@ -71,6 +71,7 @@ CI also runs the PostgreSQL concurrency suite, including eight workers draining 
 | API and dashboard | [docs/DESIGN.md#api](docs/DESIGN.md#api), [dashboard walkthrough](docs/DESIGN.md#dashboard-walkthrough) |
 | Queue throughput, scaling, workflows, and crash recovery | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) |
 | Bugs found and fixed, and how | [docs/ENGINEERING_LOG.md](docs/ENGINEERING_LOG.md) |
+| Deploying the public demo (Terraform, HTTPS, abuse limits) | [deploy/README.md](deploy/README.md) |
 | Routing cost-quality evaluation | [docs/EVALUATION.md](docs/EVALUATION.md) |
 | Tests and CI | [docs/DESIGN.md#tests](docs/DESIGN.md#tests) |
 | Limitations and next steps | [docs/DESIGN.md#known-limitations-and-next-steps](docs/DESIGN.md#known-limitations-and-next-steps) |

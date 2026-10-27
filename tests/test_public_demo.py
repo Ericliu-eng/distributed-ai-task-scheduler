@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import os
 
 from fastapi import HTTPException
 import pytest
@@ -92,9 +93,12 @@ def age(store, model, column, minutes):
                 setattr(row, column, datetime.now(timezone.utc) - timedelta(minutes=minutes))
 
 
-def test_purge_removes_only_old_finished_work():
-    store = SchedulerStore("sqlite:///:memory:")
+@pytest.mark.parametrize("url", ["sqlite:///:memory:"] + (
+    [os.environ["TEST_DATABASE_URL"]] if os.getenv("TEST_DATABASE_URL") else []))
+def test_purge_removes_only_old_finished_work(url):
+    store = SchedulerStore(url)
     store.init()
+    store.reset()
     old_task, _ = store.create_task("finished long ago")
     claimed = store.claim("w", "small")
     store.finish(old_task["id"], "w", claimed["attempt"], "ok")

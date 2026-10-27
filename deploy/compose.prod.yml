@@ -1,0 +1,103 @@
+# Public demo stack: Caddy (HTTPS) -> API -> PostgreSQL, plus two workers and the monitor.
+# Only Caddy publishes ports. Secrets come from deploy/.env (see .env.example).
+name: orbit
+
+x-database-url: &database-url
+  DATABASE_URL: postgresql+psycopg://scheduler:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@db:5432/scheduler
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: scheduler
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler -d scheduler"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  app:
+    build: ..
+    # Caddy is the only client that can reach the API, so its X-Forwarded-For is
+    # trusted; rate limits then apply per visitor rather than to Caddy itself.
+    command: ["python", "-m", "uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000",
+              "--proxy-headers", "--forwarded-allow-ips", "*"]
+    environment:
+      <<: *database-url
+      DEMO_MODE: "true"
+      ALLOW_DEMO_RESET: "false"
+      RATE_LIMIT_PER_MINUTE: "${RATE_LIMIT_PER_MINUTE:-20}"
+      MAX_ACTIVE_TASKS: "${MAX_ACTIVE_TASKS:-200}"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+  worker-small:
+    build: ..
+    command: ["python", "-m", "worker.main"]
+    environment:
+      <<: *database-url
+      WORKER_ID: worker-small-01
+      MODEL_TIER: small
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-large:
+    build: ..
+    command: ["python", "-m", "worker.main"]
+    environment:
+      <<: *database-url
+      WORKER_ID: worker-large-01
+      MODEL_TIER: large
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  recovery-monitor:
+    build: ..
+    command: ["python", "-m", "monitor.recovery"]
+    environment:
+      <<: *database-url
+      RETENTION_MINUTES: "${RETENTION_MINUTES:-60}"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in deploy/.env}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
