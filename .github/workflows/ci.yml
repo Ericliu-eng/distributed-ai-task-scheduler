@@ -54,3 +54,29 @@ jobs:
 
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
+
+      - name: Validate production Compose configuration
+        env:
+          POSTGRES_PASSWORD: ci-only
+          SITE_ADDRESS: localhost
+        run: docker compose -f deploy/compose.prod.yml config --quiet
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.5"
+
+      - name: Check formatting
+        run: terraform fmt -check -diff
+
+      - name: Validate configuration
+        run: terraform init -backend=false -input=false && terraform validate

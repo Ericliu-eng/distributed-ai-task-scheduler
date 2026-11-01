@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from hashlib import sha256
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Interval, String, Text, bindparam, case, cast, create_engine, func, insert, inspect, literal, or_, select, text, update
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Interval, String, Text, bindparam, case, cast, create_engine, delete, func, insert, inspect, literal, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from app.dag import DagError, topological_order
@@ -905,6 +905,38 @@ class SchedulerStore:
                 "all_large_cost": round(all_large_cost, 3),
                 "cost_saved_pct": round((1 - float(spent) / all_large_cost) * 100, 1) if total else 0,
                 "avg_latency_ms": max(0, round(float(avg_latency))) if avg_latency is not None else 0}
+
+    def count_active(self) -> int:
+        """Tasks that still need a worker: queued, running, or waiting on dependencies."""
+        with self.Session() as session:
+            return session.scalar(select(func.count()).select_from(Task)
+                                  .where(Task.status.in_(["queued", "running", "blocked"])))
+
+    def purge_finished(self, older_than_minutes: float) -> dict[str, int]:
+        """Delete finished work and events older than the cutoff, for a public demo.
+
+        Only finished workflows (with their tasks and edges) and finished
+        standalone tasks are removed, so nothing a worker may still touch is
+        deleted. Events older than the cutoff go too; they are a log, not state.
+        """
+        with self.lock, self.Session.begin() as session:
+            cutoff = self._db_now(session) - timedelta(minutes=older_than_minutes)
+            workflow_ids = session.scalars(select(Workflow.id).where(
+                Workflow.status != "running", Workflow.finished_at < cutoff)).all()
+            task_ids = session.scalars(select(Task.id).where(or_(
+                Task.workflow_id.in_(workflow_ids),
+                (Task.workflow_id.is_(None)) & Task.status.in_(["succeeded", "failed"])
+                & (Task.finished_at < cutoff),
+            ))).all()
+            removed = {"workflows": len(workflow_ids), "tasks": len(task_ids)}
+            for offset in range(0, len(task_ids), 500):
+                chunk = task_ids[offset:offset + 500]
+                session.execute(delete(TaskDependency).where(TaskDependency.task_id.in_(chunk)))
+                session.execute(delete(Event).where(Event.task_id.in_(chunk)))
+                session.execute(delete(Task).where(Task.id.in_(chunk)))
+            session.execute(delete(Workflow).where(Workflow.id.in_(workflow_ids)))
+            removed["events"] = session.execute(delete(Event).where(Event.created_at < cutoff)).rowcount
+            return removed
 
     def reset(self):
         with self.lock, self.Session.begin() as session:

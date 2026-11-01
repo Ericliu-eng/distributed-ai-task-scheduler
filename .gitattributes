@@ -1,0 +1,6 @@
+# Files that run on Linux must keep LF line endings even when checked out on Windows.
+# With CRLF, the EC2 boot script fails on every line ("\r: command not found").
+*.sh text eol=lf
+*.tftpl text eol=lf
+deploy/Caddyfile text eol=lf
+Dockerfile text eol=lf
